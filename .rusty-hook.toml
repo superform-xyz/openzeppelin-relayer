@@ -1,6 +1,6 @@
 [hooks]
 pre-push = "cargo fmt -- --check"
-
+commit-msg = "sh ./scripts/commit-msg.sh"
 
 [logging]
 verbose = true
