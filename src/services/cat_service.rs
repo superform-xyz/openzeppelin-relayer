@@ -76,7 +76,7 @@ mod tests {
             name: "TestCat".to_string(),
             age: 5,
         };
-        
+
         let cat = CatService::create_cat(request);
         assert_eq!(cat.name, "TestCat");
         assert_eq!(cat.age, 5);
@@ -88,15 +88,18 @@ mod tests {
             name: "UpdatedCat".to_string(),
             age: 4,
         };
-        
+
         let updated = CatService::update_cat(1, request);
         assert!(updated.is_some());
         assert_eq!(updated.unwrap().name, "UpdatedCat");
 
-        let non_existent = CatService::update_cat(999, CreateCatRequest {
-            name: "Test".to_string(),
-            age: 1,
-        });
+        let non_existent = CatService::update_cat(
+            999,
+            CreateCatRequest {
+                name: "Test".to_string(),
+                age: 1,
+            },
+        );
         assert!(non_existent.is_none());
     }
 

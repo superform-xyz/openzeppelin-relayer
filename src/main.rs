@@ -6,6 +6,7 @@ use simple_logger::SimpleLogger;
 
 pub mod config;
 pub mod controllers;
+mod errors;
 pub mod models;
 pub mod routes;
 pub mod services;

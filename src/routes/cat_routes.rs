@@ -41,13 +41,11 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{test, App, http::StatusCode};
+    use actix_web::{http::StatusCode, test, App};
 
     #[actix_web::test]
     async fn test_get_cats_route() {
-        let app = test::init_service(
-            App::new().service(get_cats)
-        ).await;
+        let app = test::init_service(App::new().service(get_cats)).await;
 
         let req = test::TestRequest::get().uri("/cats").to_request();
         let resp = test::call_service(&app, req).await;
@@ -56,9 +54,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_cat_route() {
-        let app = test::init_service(
-            App::new().service(get_cat)
-        ).await;
+        let app = test::init_service(App::new().service(get_cat)).await;
 
         let req = test::TestRequest::get().uri("/cats/1").to_request();
         let resp = test::call_service(&app, req).await;
@@ -67,9 +63,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_cat_route() {
-        let app = test::init_service(
-            App::new().service(create_cat)
-        ).await;
+        let app = test::init_service(App::new().service(create_cat)).await;
 
         let cat_req = CreateCatRequest {
             name: "TestCat".to_string(),
@@ -80,7 +74,7 @@ mod tests {
             .uri("/cats")
             .set_json(&cat_req)
             .to_request();
-            
+
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }

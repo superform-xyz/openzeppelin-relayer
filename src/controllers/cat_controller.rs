@@ -1,8 +1,9 @@
+use crate::errors::RelayerError;
 use crate::models::cat_models::CreateCatRequest;
 use crate::services::cat_service::CatService;
 use actix_web::{web, HttpResponse};
 
-type CatResult = Result<HttpResponse, actix_web::Error>;
+type CatResult = Result<HttpResponse, RelayerError>;
 
 pub async fn get_cats() -> CatResult {
     let cats = CatService::get_all_cats();
@@ -13,7 +14,7 @@ pub async fn get_cat(cat_id: web::Path<u32>) -> CatResult {
     let cat_id = cat_id.into_inner();
     match CatService::find_cat_by_id(cat_id) {
         Some(cat) => Ok(HttpResponse::Ok().json(cat)),
-        None => Ok(HttpResponse::NotFound().body("Cat not found")),
+        None => Err(RelayerError::NotFound("Cat not found".to_string())),
     }
 }
 
@@ -32,17 +33,17 @@ pub async fn update_cat(
 
     match CatService::update_cat(cat_id, cat_request) {
         Some(updated) => Ok(HttpResponse::Ok().json(updated)),
-        None => Ok(HttpResponse::NotFound().body("Cat not found")),
+        None => Err(RelayerError::NotFound("Cat not found".to_string())),
     }
 }
 
-pub async fn delete_cat(cat_id: web::Path<u32>) -> HttpResponse {
+pub async fn delete_cat(cat_id: web::Path<u32>) -> Result<HttpResponse, RelayerError> {
     let cat_id = cat_id.into_inner();
 
     if CatService::delete_cat(cat_id) {
-        HttpResponse::Ok().body("Cat deleted")
+        Ok(HttpResponse::Ok().body("Cat deleted"))
     } else {
-        HttpResponse::NotFound().body("Cat not found")
+        Err(RelayerError::NotFound("Cat not found".to_string()))
     }
 }
 
@@ -64,9 +65,10 @@ mod tests {
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
 
         // Test non-existent cat
+        // Test non-existent cat
         let cat_id = web::Path::from(999u32);
-        let resp = get_cat(cat_id).await.unwrap();
-        assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+        let resp = get_cat(cat_id).await;
+        assert!(resp.is_err());
     }
 
     #[actix_web::test]
@@ -101,20 +103,20 @@ mod tests {
             age: 4,
         };
         let json_req = web::Json(updated_cat);
-        let resp = update_cat(cat_id, json_req).await.unwrap();
-        assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+        let resp = update_cat(cat_id, json_req).await;
+        assert!(resp.is_err());
     }
 
     #[actix_web::test]
     async fn test_delete_cat() {
         // Test existing cat
         let cat_id = web::Path::from(1u32);
-        let resp = delete_cat(cat_id).await;
+        let resp = delete_cat(cat_id).await.unwrap();
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
 
         // Test non-existent cat
         let cat_id = web::Path::from(999u32);
         let resp = delete_cat(cat_id).await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+        assert!(resp.is_err());
     }
 }
