@@ -1,1 +1,2 @@
-pub mod cat_models;
+mod cat_models;
+pub use cat_models::*;

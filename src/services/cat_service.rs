@@ -1,4 +1,4 @@
-use crate::models::cat_models::{Cat, CreateCatRequest};
+use crate::models::{Cat, CreateCatRequest};
 
 pub struct CatService;
 

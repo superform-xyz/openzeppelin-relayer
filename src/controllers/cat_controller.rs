@@ -1,6 +1,6 @@
 use crate::errors::RelayerError;
-use crate::models::cat_models::CreateCatRequest;
-use crate::services::cat_service::CatService;
+use crate::models::CreateCatRequest;
+use crate::services::CatService;
 use actix_web::{web, HttpResponse};
 
 type CatResult = Result<HttpResponse, RelayerError>;

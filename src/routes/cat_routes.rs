@@ -1,5 +1,5 @@
 use crate::controllers::cat_controller;
-use crate::models::cat_models::CreateCatRequest;
+use crate::models::CreateCatRequest;
 use actix_web::{delete, get, post, put, web, Responder};
 
 #[get("/cats")]

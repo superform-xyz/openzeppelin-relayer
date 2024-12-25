@@ -1,1 +1,2 @@
-pub mod server_config;
+mod server_config;
+pub use server_config::*;

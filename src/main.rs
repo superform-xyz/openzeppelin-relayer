@@ -4,19 +4,20 @@ use dotenvy::dotenv;
 use log::info;
 use simple_logger::SimpleLogger;
 
-pub mod config;
-pub mod controllers;
+mod config;
+mod controllers;
+mod models;
+mod routes;
+mod services;
 mod errors;
-pub mod models;
-pub mod routes;
-pub mod services;
+pub use errors::*;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // Load environment variables from .env file
     dotenv().ok();
 
-    let config = config::server_config::ServerConfig::from_env();
+    let config = config::ServerConfig::from_env();
 
     // Initialize logger
     if let Err(e) = SimpleLogger::new().env().init() {
