@@ -1,2 +1,9 @@
-mod cat_service;
-pub use cat_service::*;
+//! # Services Module
+//!
+//! Implements external service integrations and providers for blockchain networks.
+
+mod cat;
+pub use cat::*;
+
+mod provider;
+pub use provider::*;

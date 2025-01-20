@@ -1,0 +1,318 @@
+use crate::{
+    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus},
+    repositories::*,
+};
+use async_trait::async_trait;
+use eyre::Result;
+use std::{
+    collections::HashMap,
+    sync::{Mutex, MutexGuard},
+};
+
+pub struct InMemoryTransactionRepository {
+    store: Mutex<HashMap<String, TransactionRepoModel>>,
+}
+
+impl InMemoryTransactionRepository {
+    pub fn new() -> Self {
+        Self {
+            store: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
+        lock.lock()
+            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))
+    }
+
+    pub async fn find_by_relayer_id(
+        &self,
+        relayer_id: &str,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store)?;
+        let filtered: Vec<TransactionRepoModel> = store
+            .values()
+            .filter(|tx| tx.relayer_id == relayer_id)
+            .cloned()
+            .collect();
+
+        let total = filtered.len() as u64;
+
+        if total == 0 {
+            return Ok(PaginatedResult::<TransactionRepoModel> {
+                items: vec![],
+                total: 0,
+                page: query.page,
+                per_page: query.per_page,
+            });
+        }
+
+        let start = ((query.page - 1) * query.per_page) as usize;
+
+        // Sort and paginate
+        let items = filtered
+            .into_iter()
+            .skip(start)
+            .take(query.per_page as usize)
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
+    pub async fn find_by_status(
+        &self,
+        status: TransactionStatus,
+    ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store)?;
+        Ok(store
+            .values()
+            .filter(|tx| tx.status == status)
+            .cloned()
+            .collect())
+    }
+
+    pub async fn find_by_nonce(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store)?;
+        Ok(store
+            .values()
+            .find(|tx| {
+                tx.relayer_id == relayer_id
+                    && matches!(&tx.network_data,
+                        NetworkTransactionData::Evm(data) if data.nonce == nonce
+                    )
+            })
+            .cloned())
+    }
+}
+
+impl Default for InMemoryTransactionRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository {
+    async fn create(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store)?;
+        if store.contains_key(&tx.id) {
+            return Err(RepositoryError::ConstraintViolation(format!(
+                "Transaction with ID {} already exists",
+                tx.id
+            )));
+        }
+        store.insert(tx.id.clone(), tx.clone());
+        Ok(tx)
+    }
+
+    async fn get_by_id(&self, id: String) -> Result<TransactionRepoModel, RepositoryError> {
+        let store = Self::acquire_lock(&self.store)?;
+        store.get(&id).cloned().ok_or_else(|| {
+            RepositoryError::NotFound(format!("Transaction with ID {} not found", id))
+        })
+    }
+
+    #[allow(clippy::map_entry)]
+    async fn update(
+        &self,
+        id: String,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store)?;
+        if store.contains_key(&id) {
+            let mut updated_tx = tx;
+            updated_tx.id = id.clone();
+            store.insert(id, updated_tx.clone());
+            Ok(updated_tx)
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {} not found",
+                id
+            )))
+        }
+    }
+
+    async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store)?;
+        if store.remove(&id).is_some() {
+            Ok(())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {} not found",
+                id
+            )))
+        }
+    }
+
+    async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store)?;
+        Ok(store.values().cloned().collect())
+    }
+
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        let total = self.count().await?;
+        let start = ((query.page - 1) * query.per_page) as usize;
+        let store = Self::acquire_lock(&self.store)?;
+        let items: Vec<TransactionRepoModel> = store
+            .values()
+            .skip(start)
+            .take(query.per_page as usize)
+            .cloned()
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total: total as u64,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
+    async fn count(&self) -> Result<usize, RepositoryError> {
+        let store = Self::acquire_lock(&self.store)?;
+        Ok(store.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::models::{EvmTransactionData, NetworkType};
+
+    use super::*;
+
+    fn create_test_transaction(id: &str) -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: id.to_string(),
+            relayer_id: "relayer-1".to_string(),
+            hash: format!("0x{}", id),
+            status: TransactionStatus::Pending,
+            created_at: 1234567890,
+            sent_at: 1234567890,
+            confirmed_at: 1234567890,
+            network_type: NetworkType::Evm,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                gas_price: 1000000000,
+                gas_limit: 21000,
+                nonce: 1,
+                value: 1000000000000000000,
+                data: "Ox".to_string(),
+                from: "0x".to_string(),
+                to: "0x".to_string(),
+                chain_id: 1,
+            }),
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_create_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        let result = repo.create(tx.clone()).await.unwrap();
+        assert_eq!(result.id, tx.id);
+        assert_eq!(repo.count().await.unwrap(), 1);
+    }
+
+    #[actix_web::test]
+    async fn test_get_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        repo.create(tx.clone()).await.unwrap();
+        let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
+        assert_eq!(stored.hash, tx.hash);
+    }
+
+    #[actix_web::test]
+    async fn test_update_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction("test-1");
+
+        repo.create(tx.clone()).await.unwrap();
+        tx.status = TransactionStatus::Confirmed;
+
+        let updated = repo.update("test-1".to_string(), tx).await.unwrap();
+        assert!(matches!(updated.status, TransactionStatus::Confirmed));
+    }
+
+    #[actix_web::test]
+    async fn test_delete_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        repo.create(tx).await.unwrap();
+        repo.delete_by_id("test-1".to_string()).await.unwrap();
+
+        let result = repo.get_by_id("test-1".to_string()).await;
+        assert!(result.is_err());
+    }
+
+    #[actix_web::test]
+    async fn test_list_all_transactions() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx1 = create_test_transaction("test-1");
+        let tx2 = create_test_transaction("test-2");
+
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+
+        let transactions = repo.list_all().await.unwrap();
+        assert_eq!(transactions.len(), 2);
+    }
+
+    #[actix_web::test]
+    async fn test_count_transactions() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        assert_eq!(repo.count().await.unwrap(), 0);
+        repo.create(tx).await.unwrap();
+        assert_eq!(repo.count().await.unwrap(), 1);
+    }
+
+    #[actix_web::test]
+    async fn test_get_nonexistent_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+        let result = repo.get_by_id("nonexistent".to_string()).await;
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[actix_web::test]
+    async fn test_duplicate_transaction_creation() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        repo.create(tx.clone()).await.unwrap();
+        let result = repo.create(tx).await;
+
+        assert!(matches!(
+            result,
+            Err(RepositoryError::ConstraintViolation(_))
+        ));
+    }
+
+    #[actix_web::test]
+    async fn test_update_nonexistent_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        let result = repo.update("nonexistent".to_string(), tx).await;
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+}
