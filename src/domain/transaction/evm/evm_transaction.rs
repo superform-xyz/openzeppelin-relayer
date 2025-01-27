@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use eyre::Result;
+use log::info;
 use std::sync::Arc;
 
 use crate::{
     domain::transaction::Transaction,
-    models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
+    jobs::{JobProducer, NotificationSend, TransactionSend, TransactionStatusCheck},
+    models::{RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
     services::EvmProvider,
 };
@@ -15,6 +17,7 @@ pub struct EvmRelayerTransaction {
     provider: EvmProvider,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
+    job_producer: Arc<JobProducer>,
 }
 
 #[allow(dead_code)]
@@ -24,22 +27,58 @@ impl EvmRelayerTransaction {
         provider: EvmProvider,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        job_producer: Arc<JobProducer>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer,
             provider,
             relayer_repository,
             transaction_repository,
+            job_producer,
         })
     }
 }
 
 #[async_trait]
 impl Transaction for EvmRelayerTransaction {
+    async fn prepare_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        info!("Preparing transaction");
+        // validate the transaction
+
+        // after preparing the transaction, we need to submit it to the job queue
+        self.job_producer
+            .produce_submit_transaction_job(
+                TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone()),
+                None,
+            )
+            .await?;
+        self.transaction_repository
+            .update_status(tx.id.clone(), TransactionStatus::Sent)
+            .await?;
+        Ok(tx)
+    }
+
     async fn submit_transaction(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        info!("submitting transaction");
+
+        self.transaction_repository
+            .update_status(tx.id.clone(), TransactionStatus::Submitted)
+            .await?;
+
+        // after submitting the transaction, we need to handle the transaction status
+        self.job_producer
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                None,
+            )
+            .await?;
+
         Ok(tx)
     }
 
@@ -47,6 +86,17 @@ impl Transaction for EvmRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        let updated: TransactionRepoModel = self
+            .transaction_repository
+            .update_status(tx.id.clone(), TransactionStatus::Confirmed)
+            .await?;
+
+        self.job_producer
+            .produce_send_notification_job(
+                NotificationSend::new(tx.id.clone(), updated.relayer_id.clone()),
+                None,
+            )
+            .await?;
         Ok(tx)
     }
 

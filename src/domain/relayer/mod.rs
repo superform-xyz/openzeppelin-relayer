@@ -11,9 +11,12 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::models::{
-    EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-    TransactionRepoModel,
+use crate::{
+    jobs::JobProducer,
+    models::{
+        EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
+        TransactionRepoModel,
+    },
 };
 
 use crate::{
@@ -26,15 +29,17 @@ use eyre::Result;
 mod evm;
 mod solana;
 mod stellar;
+mod util;
 
 pub use evm::*;
 pub use solana::*;
 pub use stellar::*;
+pub use util::*;
 
 #[async_trait]
 #[allow(dead_code)]
 pub trait Relayer {
-    async fn send_transaction(
+    async fn process_transaction_request(
         &self,
         tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError>;
@@ -59,14 +64,18 @@ pub enum NetworkRelayer {
 
 #[async_trait]
 impl Relayer for NetworkRelayer {
-    async fn send_transaction(
+    async fn process_transaction_request(
         &self,
         tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
         match self {
-            NetworkRelayer::Evm(relayer) => relayer.send_transaction(tx_request).await,
-            NetworkRelayer::Solana(relayer) => relayer.send_transaction(tx_request).await,
-            NetworkRelayer::Stellar(relayer) => relayer.send_transaction(tx_request).await,
+            NetworkRelayer::Evm(relayer) => relayer.process_transaction_request(tx_request).await,
+            NetworkRelayer::Solana(relayer) => {
+                relayer.process_transaction_request(tx_request).await
+            }
+            NetworkRelayer::Stellar(relayer) => {
+                relayer.process_transaction_request(tx_request).await
+            }
         }
     }
 
@@ -143,6 +152,7 @@ pub trait RelayerFactoryTrait {
         model: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
 }
 pub struct RelayerFactory;
@@ -152,6 +162,7 @@ impl RelayerFactoryTrait for RelayerFactory {
         relayer: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
         match relayer.network_type {
             NetworkType::Evm => {
@@ -173,18 +184,27 @@ impl RelayerFactoryTrait for RelayerFactory {
                     network,
                     relayer_repository,
                     transaction_repository,
+                    job_producer,
                 )?;
 
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let relayer =
-                    SolanaRelayer::new(relayer, relayer_repository, transaction_repository)?;
+                let relayer = SolanaRelayer::new(
+                    relayer,
+                    relayer_repository,
+                    transaction_repository,
+                    job_producer,
+                )?;
                 Ok(NetworkRelayer::Solana(relayer))
             }
             NetworkType::Stellar => {
-                let relayer =
-                    StellarRelayer::new(relayer, relayer_repository, transaction_repository)?;
+                let relayer = StellarRelayer::new(
+                    relayer,
+                    relayer_repository,
+                    transaction_repository,
+                    job_producer,
+                )?;
                 Ok(NetworkRelayer::Stellar(relayer))
             }
         }

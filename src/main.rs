@@ -25,11 +25,16 @@
 
 use std::sync::Arc;
 
-use actix_web::{middleware, middleware::Logger, web, App, HttpServer};
+use actix_web::{
+    middleware::{self, Logger},
+    web::{self, ThinData},
+    App, HttpServer,
+};
 use color_eyre::{eyre::WrapErr, Report, Result};
 use config::Config;
 use dotenvy::dotenv;
 use futures::future::try_join_all;
+use jobs::{setup_workers, Queue};
 use log::info;
 use models::RelayerRepoModel;
 use repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository};
@@ -38,6 +43,7 @@ use simple_logger::SimpleLogger;
 mod api;
 mod config;
 mod domain;
+mod jobs;
 mod models;
 mod repositories;
 mod services;
@@ -66,7 +72,7 @@ fn load_config_file() -> Result<Config> {
     config::load_config().wrap_err("Failed to load config file")
 }
 
-/// Initializes application state and repositories
+/// Initializes application state
 ///
 /// # Returns
 ///
@@ -77,15 +83,22 @@ fn load_config_file() -> Result<Config> {
 /// Returns error if:
 /// - Repository initialization fails
 /// - Configuration loading fails
-async fn initialize_app_state(config_file: Config) -> Result<web::ThinData<AppState>> {
+async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
     let relayer_repository = Arc::new(InMemoryRelayerRepository::new());
     let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
+    let queue = Queue::setup().await;
+    let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
     let app_state = web::ThinData(AppState {
         relayer_repository,
         transaction_repository,
+        job_producer,
     });
 
+    Ok(app_state)
+}
+
+async fn process_config_file(config_file: Config, app_state: ThinData<AppState>) -> Result<()> {
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
         let repo_model = RelayerRepoModel::try_from(relayer.clone())
             .wrap_err("Failed to convert relayer config")?;
@@ -100,8 +113,7 @@ async fn initialize_app_state(config_file: Config) -> Result<web::ThinData<AppSt
     try_join_all(relayer_futures)
         .await
         .wrap_err("Failed to initialize relayer repository")?;
-
-    Ok(app_state)
+    Ok(())
 }
 
 #[actix_web::main]
@@ -113,10 +125,16 @@ async fn main() -> Result<()> {
 
     let config_file = load_config_file()?;
     info!("Config: {:?}", config_file);
-
     let config = config::ServerConfig::from_env();
 
-    let app_state = initialize_app_state(config_file).await?;
+    let app_state = initialize_app_state().await?;
+
+    // Setup workers for processing jobs
+    setup_workers(app_state.clone()).await?;
+
+    info!("Processing config file");
+
+    process_config_file(config_file, app_state.clone()).await?;
 
     info!("Starting server on {}:{}", config.host, config.port);
     HttpServer::new(move || {

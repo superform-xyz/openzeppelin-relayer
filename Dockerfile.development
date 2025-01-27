@@ -4,6 +4,9 @@ FROM cgr.dev/chainguard/rust:latest-dev as base
 WORKDIR /usr/app
 
 USER root
+RUN apk update && apk add openssl-dev
+ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig
+
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
@@ -11,6 +14,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Setting up build directories
 FROM cgr.dev/chainguard/glibc-dynamic
+
+COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
+COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3 
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
