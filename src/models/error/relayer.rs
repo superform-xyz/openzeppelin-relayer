@@ -1,3 +1,5 @@
+use crate::services::{SignerError, SignerFactoryError};
+
 use super::{ApiError, RepositoryError};
 use serde::Serialize;
 use thiserror::Error;
@@ -10,6 +12,12 @@ pub enum RelayerError {
     ProviderError(String),
     #[error("Queue error: {0}")]
     QueueError(String),
+    #[error("Signer factory error: {0}")]
+    SignerFactoryError(#[from] SignerFactoryError),
+    #[error("Signer error: {0}")]
+    SignerError(#[from] SignerError),
+    #[error("Not supported: {0}")]
+    NotSupported(String),
     #[error("Relayer is disabled")]
     RelayerDisabled,
     #[error("Relayer is paused")]
@@ -22,6 +30,9 @@ impl From<RelayerError> for ApiError {
             RelayerError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
             RelayerError::ProviderError(msg) => ApiError::InternalError(msg),
             RelayerError::QueueError(msg) => ApiError::InternalError(msg),
+            RelayerError::SignerError(err) => ApiError::InternalError(err.to_string()),
+            RelayerError::SignerFactoryError(err) => ApiError::InternalError(err.to_string()),
+            RelayerError::NotSupported(msg) => ApiError::BadRequest(msg),
             RelayerError::RelayerDisabled => {
                 ApiError::ForbiddenError("Relayer disabled".to_string())
             }

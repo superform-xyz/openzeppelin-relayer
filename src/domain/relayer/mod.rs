@@ -15,8 +15,9 @@ use crate::{
     jobs::JobProducer,
     models::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        TransactionRepoModel,
+        SignerRepoModel, TransactionRepoModel,
     },
+    services::EvmSignerFactory,
 };
 
 use crate::{
@@ -43,12 +44,12 @@ pub trait Relayer {
         &self,
         tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError>;
-    async fn get_balance(&self) -> Result<u128, RelayerError>;
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError>;
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError>;
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError>;
     async fn sign_typed_data(
         &self,
-        request: SignDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError>;
     async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
     async fn get_status(&self) -> Result<bool, RelayerError>;
@@ -78,7 +79,7 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn get_balance(&self) -> Result<u128, RelayerError> {
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_balance().await,
             NetworkRelayer::Solana(relayer) => relayer.get_balance().await,
@@ -104,7 +105,7 @@ impl Relayer for NetworkRelayer {
 
     async fn sign_typed_data(
         &self,
-        request: SignDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.sign_typed_data(request).await,
@@ -140,7 +141,8 @@ impl Relayer for NetworkRelayer {
 
 pub trait RelayerFactoryTrait {
     fn create_relayer(
-        model: RelayerRepoModel,
+        relayer: RelayerRepoModel,
+        signer: SignerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
@@ -151,6 +153,7 @@ pub struct RelayerFactory;
 impl RelayerFactoryTrait for RelayerFactory {
     fn create_relayer(
         relayer: RelayerRepoModel,
+        signer: SignerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
@@ -169,8 +172,10 @@ impl RelayerFactoryTrait for RelayerFactory {
                     })?;
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer)?;
                 let relayer = EvmRelayer::new(
                     relayer,
+                    signer_service,
                     evm_provider,
                     network,
                     relayer_repository,
@@ -208,11 +213,29 @@ pub struct SignDataRequest {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct SignDataResponse {
-    pub sig: String,
+pub struct SignDataResponseEvm {
     pub r: String,
     pub s: String,
     pub v: u8,
+    pub sig: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SignDataResponseSolana {
+    pub signature: String,
+    pub public_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum SignDataResponse {
+    Evm(SignDataResponseEvm),
+    Solana(SignDataResponseSolana),
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SignTypedDataRequest {
+    pub domain_separator: String,
+    pub hash_struct_message: String,
 }
 
 // JSON-RPC Request struct
@@ -239,6 +262,12 @@ pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
     pub data: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BalanceResponse {
+    pub balance: u128,
+    pub unit: String,
 }
 
 #[derive(Serialize, Deserialize)]

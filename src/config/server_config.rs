@@ -5,6 +5,7 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub redis_url: String,
+    pub config_file_path: String,
     pub api_key: String,
     pub rate_limit_requests_per_second: u64,
     pub rate_limit_burst_size: u32,
@@ -19,6 +20,8 @@ impl ServerConfig {
                 .parse()
                 .unwrap_or(8080),
             redis_url: env::var("REDIS_URL").expect("REDIS_URL must be set"),
+            config_file_path: env::var("CONFIG_FILE_PATH")
+                .unwrap_or_else(|_| "config/config.json".to_string()),
             api_key: env::var("API_KEY").expect("API_KEY must be set"),
             rate_limit_requests_per_second: env::var("RATE_LIMIT_REQUESTS_PER_SECOND")
                 .unwrap_or_else(|_| "2".to_string())

@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::{
     domain::{
         relayer::{Relayer, RelayerError},
-        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        SignTypedDataRequest,
     },
     jobs::{JobProducer, TransactionRequest},
     models::{
@@ -11,7 +12,7 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository},
-    services::EvmProvider,
+    services::{DataSignerTrait, EvmProvider, EvmSigner},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -19,6 +20,7 @@ use eyre::Result;
 #[allow(dead_code)]
 pub struct EvmRelayer {
     relayer: RelayerRepoModel,
+    signer: EvmSigner,
     network: EvmNetwork,
     provider: EvmProvider,
     relayer_repository: Arc<InMemoryRelayerRepository>,
@@ -29,6 +31,7 @@ pub struct EvmRelayer {
 impl EvmRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
+        signer: EvmSigner,
         provider: EvmProvider,
         network: EvmNetwork,
         relayer_repository: Arc<InMemoryRelayerRepository>,
@@ -37,6 +40,7 @@ impl EvmRelayer {
     ) -> Result<Self, RelayerError> {
         Ok(Self {
             relayer,
+            signer,
             network,
             provider,
             relayer_repository,
@@ -69,9 +73,26 @@ impl Relayer for EvmRelayer {
         Ok(transaction)
     }
 
-    async fn get_balance(&self) -> Result<u128, RelayerError> {
-        println!("EVM get_balance...");
-        Ok(0)
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
+        let address = self
+            .relayer
+            .address
+            .clone()
+            .expect("Relayer address not found");
+        let balance: u128 = self
+            .provider
+            .get_balance(&address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?
+            .try_into()
+            .map_err(|_| {
+                RelayerError::ProviderError("Failed to convert balance to u128".to_string())
+            })?;
+
+        Ok(BalanceResponse {
+            balance,
+            unit: "wei".to_string(),
+        })
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {
@@ -84,27 +105,19 @@ impl Relayer for EvmRelayer {
         Ok(true)
     }
 
-    async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
-        println!("EVM sign_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+    async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
+        let result = self.signer.sign_data(request).await?;
+
+        Ok(result)
     }
 
     async fn sign_typed_data(
         &self,
-        _request: SignDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
-        println!("EVM sign_typed_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+        let result = self.signer.sign_typed_data(request).await?;
+
+        Ok(result)
     }
 
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {

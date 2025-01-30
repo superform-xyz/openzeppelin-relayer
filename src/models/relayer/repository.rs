@@ -49,7 +49,9 @@ pub struct RelayerRepoModel {
     pub network: String,
     pub paused: bool,
     pub network_type: NetworkType,
+    pub signer_id: String,
     pub policies: Option<RelayerNetworkPolicy>,
+    pub address: Option<String>,
     pub system_disabled: bool,
 }
 
@@ -80,6 +82,8 @@ mod tests {
             network: "test_network".to_string(),
             network_type: NetworkType::Evm,
             policies: None,
+            signer_id: "test_signer".to_string(),
+            address: None,
         }
     }
 

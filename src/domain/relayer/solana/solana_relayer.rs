@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::{
     domain::{
         relayer::{Relayer, RelayerError},
-        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        SignDataResponseSolana, SignTypedDataRequest,
     },
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, SolanaNetwork, TransactionRepoModel},
@@ -56,9 +57,12 @@ impl Relayer for SolanaRelayer {
         Ok(transaction)
     }
 
-    async fn get_balance(&self) -> Result<u128, RelayerError> {
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         println!("Solana get_balance...");
-        Ok(0)
+        Ok(BalanceResponse {
+            balance: 0,
+            unit: "".to_string(),
+        })
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {
@@ -73,25 +77,22 @@ impl Relayer for SolanaRelayer {
 
     async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         println!("Solana sign_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+
+        let signature = SignDataResponseSolana {
+            signature: "".to_string(),
+            public_key: "".to_string(),
+        };
+
+        Ok(SignDataResponse::Solana(signature))
     }
 
     async fn sign_typed_data(
         &self,
-        _request: SignDataRequest,
+        _request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
-        println!("Solana sign_typed_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+        Err(RelayerError::NotSupported(
+            "Signing typed data not supported for Solana".to_string(),
+        ))
     }
 
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {

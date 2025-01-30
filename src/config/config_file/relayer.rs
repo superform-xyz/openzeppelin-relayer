@@ -1,80 +1,15 @@
+//! Configuration file definitions for relayer services.
+//!
+//! Provides configuration structures and validation for relayer settings:
+//! - Network configuration (EVM, Solana, Stellar)
+//! - Gas/fee policies
+//! - Transaction validation rules
+//! - Network endpoints
+use super::{ConfigFileError, ConfigFileNetworkType};
 use crate::models::{EvmNetwork, SolanaNetwork, StellarNetwork};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs};
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum ConfigFileError {
-    #[error("Invalid ID length: {0}")]
-    InvalidIdLength(String),
-    #[error("Invalid ID format: {0}")]
-    InvalidIdFormat(String),
-    #[error("Missing required field: {0}")]
-    MissingField(String),
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
-    #[error("JSON error: {0}")]
-    JsonError(#[from] serde_json::Error),
-    #[error("Duplicate id error: {0}")]
-    DuplicateId(String),
-    #[error("Invalid network type: {0}")]
-    InvalidConfigFileNetworkType(String),
-    #[error("Invalid network name for {network_type}: {name}")]
-    InvalidNetwork { network_type: String, name: String },
-    #[error("Invalid policy: {0}")]
-    InvalidPolicy(String),
-    #[error("Internal error: {0}")]
-    InternalError(String),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Config {
-    pub relayers: Vec<RelayerFileConfig>,
-    // pub networks: Vec<String>,
-    // pub accounts: Vec<String>,
-    // notifications
-    // signers
-}
-
-impl Config {
-    fn validate_relayer_id_uniqueness(
-        relayers: &[RelayerFileConfig],
-    ) -> Result<(), ConfigFileError> {
-        let mut seen_ids = HashSet::new();
-        for relayer in relayers {
-            if !seen_ids.insert(&relayer.id) {
-                return Err(ConfigFileError::DuplicateId(format!(
-                    "Duplicate relayer ID found: {}",
-                    relayer.id
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    pub fn validate(&self) -> Result<(), ConfigFileError> {
-        // Validate relayers field
-        if self.relayers.is_empty() {
-            return Err(ConfigFileError::MissingField("relayers".into()));
-        }
-        // Check for duplicate IDs
-        Self::validate_relayer_id_uniqueness(&self.relayers)?;
-
-        for relayer in &self.relayers {
-            relayer.validate()?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum ConfigFileNetworkType {
-    Evm,
-    Stellar,
-    Solana,
-}
+use std::collections::HashSet;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -119,6 +54,7 @@ pub struct RelayerFileConfig {
     pub network_type: ConfigFileNetworkType,
     #[serde(default)]
     pub policies: Option<ConfigFileRelayerNetworkPolicy>,
+    pub signer_id: String,
 }
 use serde::{de, Deserializer};
 use serde_json::Value;
@@ -164,6 +100,12 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
         )
         .map_err(de::Error::custom)?;
 
+        let signer_id = value
+            .get("signer_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| de::Error::missing_field("signer_id"))?
+            .to_string();
+
         // Handle `policies`, using `network_type` to determine how to deserialize
         let policies = if let Some(policy_value) = value.get_mut("policies") {
             match network_type {
@@ -198,6 +140,7 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             paused,
             network_type,
             policies,
+            signer_id,
         })
     }
 }
@@ -267,92 +210,124 @@ impl RelayerFileConfig {
     }
 }
 
-pub fn load_config() -> Result<Config, ConfigFileError> {
-    let config_str = fs::read_to_string("config.json")?;
-    let config: Config = serde_json::from_str(&config_str)?;
-    config.validate()?;
-    Ok(config)
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct RelayersFileConfig {
+    pub relayers: Vec<RelayerFileConfig>,
+}
+
+impl RelayersFileConfig {
+    pub fn new(relayers: Vec<RelayerFileConfig>) -> Self {
+        Self { relayers }
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigFileError> {
+        if self.relayers.is_empty() {
+            return Err(ConfigFileError::MissingField("relayers".into()));
+        }
+
+        let mut ids = HashSet::new();
+        for relayer in &self.relayers {
+            relayer.validate()?;
+            if !ids.insert(relayer.id.clone()) {
+                return Err(ConfigFileError::DuplicateId(relayer.id.clone()));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
-    fn create_valid_config() -> Config {
-        Config {
-            relayers: vec![RelayerFileConfig {
-                id: "test-1".to_string(),
-                name: "Test Relayer".to_string(),
-                network: "sepolia".to_string(),
-                paused: false,
-                network_type: ConfigFileNetworkType::Evm,
-                policies: None,
-            }],
-        }
+    #[test]
+    fn test_valid_evm_relayer() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "policies": {
+                "gas_price_cap": 100,
+                "whitelist_receivers": ["0x1234"],
+                "eip1559_pricing": true
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+        assert_eq!(relayer.id, "test-relayer");
+        assert_eq!(relayer.network_type, ConfigFileNetworkType::Evm);
     }
 
     #[test]
-    fn test_valid_config_validation() {
-        let config = create_valid_config();
-        assert!(config.validate().is_ok());
+    fn test_valid_solana_relayer() {
+        let config = json!({
+            "id": "solana-relayer",
+            "name": "Solana Mainnet Relayer",
+            "network": "mainnet",
+            "network_type": "solana",
+            "signer_id": "solana-signer",
+            "paused": false,
+            "policies": {
+                "max_retries": 2,
+                "confirmation_blocks": 5,
+                "timeout_seconds": 10
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+        assert_eq!(relayer.id, "solana-relayer");
+        assert_eq!(relayer.network_type, ConfigFileNetworkType::Solana);
     }
 
     #[test]
-    fn test_empty_relayers() {
-        let config = Config { relayers: vec![] };
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::MissingField(_))
-        ));
+    fn test_valid_stellar_relayer() {
+        let config = json!({
+            "id": "stellar-relayer",
+            "name": "Stellar Public Relayer",
+            "network": "mainnet",
+            "network_type": "stellar",
+            "signer_id": "stellar_signer",
+            "paused": false,
+            "policies": {
+                "max_fee": 100,
+                "timeout_seconds": 10,
+                "min_account_balance": "1"
+
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+        assert_eq!(relayer.id, "stellar-relayer");
+        assert_eq!(relayer.network_type, ConfigFileNetworkType::Stellar);
     }
 
     #[test]
-    fn test_invalid_id_format() {
-        let mut config = create_valid_config();
-        config.relayers[0].id = "invalid@id".to_string();
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::InvalidIdFormat(_))
-        ));
+    fn test_invalid_network_type() {
+        let config = json!({
+            "id": "test-relayer",
+            "network_type": "invalid",
+            "signer_id": "test-signer"
+        });
+
+        let result = serde_json::from_value::<RelayerFileConfig>(config);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_id_too_long() {
-        let mut config = create_valid_config();
-        config.relayers[0].id = "a".repeat(37);
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::InvalidIdLength(_))
-        ));
-    }
+    #[should_panic(expected = "missing field `name`")]
+    fn test_missing_required_fields() {
+        let config = json!({
+            "id": "test-relayer"
+        });
 
-    #[test]
-    fn test_duplicate_ids() {
-        let mut config = create_valid_config();
-        config.relayers.push(config.relayers[0].clone());
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::DuplicateId(_))
-        ));
-    }
-
-    #[test]
-    fn test_missing_name() {
-        let mut config = create_valid_config();
-        config.relayers[0].name = "".to_string();
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::MissingField(_))
-        ));
-    }
-
-    #[test]
-    fn test_missing_network() {
-        let mut config = create_valid_config();
-        config.relayers[0].network = "".to_string();
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::MissingField(_))
-        ));
+        let _relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
     }
 }

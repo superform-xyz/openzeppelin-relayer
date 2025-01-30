@@ -1,5 +1,8 @@
 use crate::{
-    domain::{JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse},
+    domain::{
+        BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        SignTypedDataRequest,
+    },
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
@@ -54,9 +57,12 @@ impl Relayer for StellarRelayer {
         Ok(transaction)
     }
 
-    async fn get_balance(&self) -> Result<u128, RelayerError> {
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         println!("Stellar get_balance...");
-        Ok(0)
+        Ok(BalanceResponse {
+            balance: 0,
+            unit: "".to_string(),
+        })
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {
@@ -70,26 +76,18 @@ impl Relayer for StellarRelayer {
     }
 
     async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
-        info!("Stellar sign_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+        Err(RelayerError::NotSupported(
+            "Signing data not supported for Stellar".to_string(),
+        ))
     }
 
     async fn sign_typed_data(
         &self,
-        _request: SignDataRequest,
+        _request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
-        info!("Stellar sign_typed_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+        Err(RelayerError::NotSupported(
+            "Signing typed data not supported for Stellar".to_string(),
+        ))
     }
 
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {

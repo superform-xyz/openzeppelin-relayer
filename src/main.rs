@@ -33,13 +33,16 @@ use actix_web::{
     App, HttpResponse, HttpServer,
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
-use config::{ApiKeyRateLimit, Config};
+use config::{ApiKeyRateLimit, Config, SignerConfigKeystore};
 use dotenvy::dotenv;
 use futures::future::try_join_all;
 use jobs::{setup_workers, Queue};
 use log::info;
-use models::RelayerRepoModel;
-use repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository};
+use models::{RelayerRepoModel, SignerRepoModel, SignerType};
+use repositories::{
+    InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionRepository, Repository,
+};
+use services::{Signer, SignerFactory};
 use simple_logger::SimpleLogger;
 
 mod api;
@@ -70,8 +73,8 @@ fn setup_logging_and_env() -> Result<()> {
         .wrap_err("Failed to initialize logger")
 }
 
-fn load_config_file() -> Result<Config> {
-    config::load_config().wrap_err("Failed to load config file")
+fn load_config_file(config_file_path: &str) -> Result<Config> {
+    config::load_config(config_file_path).wrap_err("Failed to load config file")
 }
 
 /// Initializes application state
@@ -88,22 +91,63 @@ fn load_config_file() -> Result<Config> {
 async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
     let relayer_repository = Arc::new(InMemoryRelayerRepository::new());
     let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
+    let signer_repository = Arc::new(InMemorySignerRepository::new());
+
     let queue = Queue::setup().await;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
     let app_state = web::ThinData(AppState {
         relayer_repository,
         transaction_repository,
+        signer_repository,
         job_producer,
     });
 
     Ok(app_state)
 }
 
+// initialise signers and relayers and populate repositories
 async fn process_config_file(config_file: Config, app_state: ThinData<AppState>) -> Result<()> {
+    let signer_futures = config_file.signers.iter().map(|signer| async {
+        let mut signer_repo_model = SignerRepoModel::try_from(signer.clone())
+            .wrap_err("Failed to convert signer config")?;
+
+        // TODO explore safe ways to store keys in memory
+        if signer_repo_model.signer_type == SignerType::Local {
+            let raw_key = signer.load_keystore().await?;
+            signer_repo_model.raw_key = Some(raw_key);
+        }
+
+        app_state
+            .signer_repository
+            .create(signer_repo_model)
+            .await
+            .wrap_err("Failed to create signer repository entry")?;
+        Ok::<(), Report>(())
+    });
+
+    try_join_all(signer_futures)
+        .await
+        .wrap_err("Failed to initialize signer repository")?;
+
+    let signers = app_state.signer_repository.list_all().await?;
+
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
-        let repo_model = RelayerRepoModel::try_from(relayer.clone())
+        let mut repo_model = RelayerRepoModel::try_from(relayer.clone())
             .wrap_err("Failed to convert relayer config")?;
+        let signer_model = signers
+            .iter()
+            .find(|s| s.id == repo_model.signer_id)
+            .ok_or_else(|| eyre::eyre!("Signer not found"))?;
+        let signer_service = SignerFactory::create_signer(signer_model.clone())
+            .wrap_err("Failed to create signer service")?;
+
+        // obtain relayer address
+        let address = signer_service.address().await?;
+
+        // set relayer address
+        repo_model.address = Some(address.to_string());
+
         app_state
             .relayer_repository
             .create(repo_model)
@@ -125,9 +169,8 @@ async fn main() -> Result<()> {
 
     setup_logging_and_env()?;
 
-    let config_file = load_config_file()?;
-    info!("Config: {:?}", config_file);
     let config = Arc::new(config::ServerConfig::from_env());
+    let config_file = load_config_file(&config.config_file_path)?;
 
     let app_state = initialize_app_state().await?;
 
@@ -135,7 +178,6 @@ async fn main() -> Result<()> {
     setup_workers(app_state.clone()).await?;
 
     info!("Processing config file");
-
     process_config_file(config_file, app_state.clone()).await?;
 
     // Rate limit configuration
