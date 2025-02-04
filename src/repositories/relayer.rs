@@ -230,6 +230,7 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
             signer_id: config.signer_id,
             policies,
             address: None,
+            notification_id: config.notification_id,
             system_disabled: false,
         })
     }
@@ -280,6 +281,7 @@ mod tests {
             policies: None,
             signer_id: "test".to_string(),
             address: None,
+            notification_id: None,
             system_disabled: false,
         }
     }

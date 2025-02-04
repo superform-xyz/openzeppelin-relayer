@@ -1,8 +1,10 @@
-use crate::models::transaction::{NetworkTransactionData, TransactionRepoModel, TransactionStatus};
-use chrono::{TimeZone, Utc};
-use serde::{Serialize, Serializer};
+use crate::{
+    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus},
+    utils::deserialize_u128,
+};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum TransactionResponse {
     Evm(EvmTransactionResponse),
@@ -10,18 +12,17 @@ pub enum TransactionResponse {
     Stellar(StellarTransactionResponse),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq, Deserialize)]
 pub struct EvmTransactionResponse {
     pub id: String,
     pub hash: Option<String>,
     pub status: TransactionStatus,
-    #[serde(serialize_with = "serialize_timestamp")]
-    pub created_at: u64,
-    #[serde(serialize_with = "serialize_timestamp")]
-    pub sent_at: u64,
-    #[serde(serialize_with = "serialize_timestamp")]
-    pub confirmed_at: u64,
+    pub created_at: String,
+    pub sent_at: String,
+    pub confirmed_at: String,
+    #[serde(deserialize_with = "deserialize_u128")]
     pub gas_price: u128,
+    #[serde(deserialize_with = "deserialize_u128")]
     pub gas_limit: u128,
     pub nonce: u64,
     pub value: u64,
@@ -30,46 +31,30 @@ pub struct EvmTransactionResponse {
     pub relayer_id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq, Deserialize)]
 pub struct SolanaTransactionResponse {
     pub id: String,
     pub hash: Option<String>,
     pub status: TransactionStatus,
-    #[serde(serialize_with = "serialize_timestamp")]
-    pub created_at: u64,
-    #[serde(serialize_with = "serialize_timestamp")]
-    pub sent_at: u64,
-    #[serde(serialize_with = "serialize_timestamp")]
-    pub confirmed_at: u64,
+    pub created_at: String,
+    pub sent_at: String,
+    pub confirmed_at: String,
     pub recent_blockhash: String,
     pub fee_payer: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq, Deserialize)]
 pub struct StellarTransactionResponse {
     pub id: String,
     pub hash: Option<String>,
     pub status: TransactionStatus,
-    #[serde(serialize_with = "serialize_timestamp")]
-    pub created_at: u64,
-    #[serde(serialize_with = "serialize_timestamp")]
-    pub sent_at: u64,
-    pub confirmed_at: u64,
+    pub created_at: String,
+    pub sent_at: String,
+    pub confirmed_at: String,
     pub source_account: String,
+    #[serde(deserialize_with = "deserialize_u128")]
     pub fee: u128,
     pub sequence_number: u64,
-}
-
-fn serialize_timestamp<S>(timestamp: &u64, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let datetime = Utc
-        .timestamp_opt(*timestamp as i64, 0)
-        .single()
-        .unwrap_or_else(Utc::now);
-
-    serializer.serialize_str(&datetime.to_rfc3339())
 }
 
 impl From<TransactionRepoModel> for TransactionResponse {

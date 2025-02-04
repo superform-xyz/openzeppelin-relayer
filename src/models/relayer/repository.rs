@@ -52,6 +52,7 @@ pub struct RelayerRepoModel {
     pub signer_id: String,
     pub policies: Option<RelayerNetworkPolicy>,
     pub address: Option<String>,
+    pub notification_id: Option<String>,
     pub system_disabled: bool,
 }
 
@@ -84,6 +85,7 @@ mod tests {
             policies: None,
             signer_id: "test_signer".to_string(),
             address: None,
+            notification_id: None,
         }
     }
 
