@@ -11,8 +11,9 @@ use eyre::Result;
 use log::info;
 
 use crate::{
+    constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, TransactionCommand, TransactionSend, DEFAULT_MAXIMUM_RETRIES},
+    jobs::{handle_result, Job, TransactionCommand, TransactionSend},
     AppState,
 };
 
@@ -29,7 +30,7 @@ pub async fn transaction_submission_handler(
         result,
         attempt,
         "Transaction Sender",
-        DEFAULT_MAXIMUM_RETRIES,
+        WORKER_DEFAULT_MAXIMUM_RETRIES,
     )
 }
 

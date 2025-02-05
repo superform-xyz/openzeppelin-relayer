@@ -30,6 +30,7 @@ pub async fn get_relayer_transaction(
         relayer_model,
         state.relayer_repository(),
         state.transaction_repository(),
+        state.transaction_counter_store(),
         state.job_producer(),
     )
     .map_err(|e| e.into())
@@ -43,6 +44,7 @@ pub async fn get_relayer_transaction_by_model(
         relayer_model,
         state.relayer_repository(),
         state.transaction_repository(),
+        state.transaction_counter_store(),
         state.job_producer(),
     )
     .map_err(|e| e.into())

@@ -17,11 +17,13 @@ use crate::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
         SignerRepoModel, TransactionRepoModel,
     },
-    services::EvmSignerFactory,
+    services::{EvmSignerFactory, TransactionCounterService},
 };
 
 use crate::{
-    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
+    repositories::{
+        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+    },
     services::EvmProvider,
 };
 use async_trait::async_trait;
@@ -53,7 +55,7 @@ pub trait Relayer {
     ) -> Result<SignDataResponse, RelayerError>;
     async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
     async fn get_status(&self) -> Result<bool, RelayerError>;
-    async fn sync_relayer(&self) -> Result<bool, RelayerError>;
+    async fn initialize_relayer(&self) -> Result<(), RelayerError>;
 }
 
 pub enum NetworkRelayer {
@@ -130,11 +132,11 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn sync_relayer(&self) -> Result<bool, RelayerError> {
+    async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         match self {
-            NetworkRelayer::Evm(relayer) => relayer.sync_relayer().await,
-            NetworkRelayer::Solana(relayer) => relayer.sync_relayer().await,
-            NetworkRelayer::Stellar(relayer) => relayer.sync_relayer().await,
+            NetworkRelayer::Evm(relayer) => relayer.initialize_relayer().await,
+            NetworkRelayer::Solana(relayer) => relayer.initialize_relayer().await,
+            NetworkRelayer::Stellar(relayer) => relayer.initialize_relayer().await,
         }
     }
 }
@@ -145,6 +147,7 @@ pub trait RelayerFactoryTrait {
         signer: SignerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
 }
@@ -156,6 +159,7 @@ impl RelayerFactoryTrait for RelayerFactory {
         signer: SignerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
         match relayer.network_type {
@@ -173,6 +177,11 @@ impl RelayerFactoryTrait for RelayerFactory {
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
                 let signer_service = EvmSignerFactory::create_evm_signer(signer)?;
+                let transaction_counter_service = TransactionCounterService::new(
+                    relayer.id.clone(),
+                    relayer.address.clone(),
+                    transaction_counter_store,
+                );
                 let relayer = EvmRelayer::new(
                     relayer,
                     signer_service,
@@ -180,6 +189,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     network,
                     relayer_repository,
                     transaction_repository,
+                    transaction_counter_service,
                     job_producer,
                 )?;
 

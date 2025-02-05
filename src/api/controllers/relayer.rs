@@ -10,8 +10,8 @@ use crate::{
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
         get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, JsonRpcRequest,
-        Relayer, RelayerFactory, RelayerFactoryTrait, RelayerUpdateRequest, SignDataRequest,
-        SignDataResponse, SignTypedDataRequest, Transaction,
+        Relayer, RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTypedDataRequest,
+        Transaction,
     },
     models::{
         ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
@@ -97,19 +97,9 @@ pub async fn send_transaction(
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = get_relayer_by_id(relayer_id, &state).await?;
-    let signer_config = state
-        .signer_repository
-        .get_by_id(relayer_repo_model.signer_id.clone())
-        .await?;
     relayer_repo_model.validate_active_state()?;
 
-    let relayer = RelayerFactory::create_relayer(
-        relayer_repo_model.clone(),
-        signer_config,
-        state.relayer_repository(),
-        state.transaction_repository(),
-        state.job_producer(),
-    )?;
+    let relayer = get_network_relayer(relayer_repo_model.id.clone(), &state).await?;
 
     let tx_request: NetworkTransactionRequest =
         NetworkTransactionRequest::from_json(&relayer_repo_model.network_type, request.clone())?;

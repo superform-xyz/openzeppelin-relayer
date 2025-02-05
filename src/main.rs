@@ -39,25 +39,21 @@ use actix_web::HttpResponse;
 
 use config::ApiKeyRateLimit;
 use dotenvy::dotenv;
-use jobs::{setup_workers, Queue};
+use init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file};
 use log::info;
-use repositories::{
-    InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
-    InMemoryTransactionRepository,
-};
 use simple_logger::SimpleLogger;
 
 mod api;
 mod config;
+mod constants;
 mod domain;
+mod init;
 mod jobs;
 mod models;
 mod repositories;
 mod services;
 mod utils;
 pub use models::{ApiError, AppState};
-mod config_processor;
-use config_processor::process_config_file;
 
 /// Sets up logging and environment configuration
 ///
@@ -82,37 +78,6 @@ fn load_config_file(config_file_path: &str) -> Result<Config> {
     config::load_config(config_file_path).wrap_err("Failed to load config file")
 }
 
-/// Initializes application state
-///
-/// # Returns
-///
-/// * `Result<web::Data<AppState>>` - Initialized application state
-///
-/// # Errors
-///
-/// Returns error if:
-/// - Repository initialization fails
-/// - Configuration loading fails
-async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
-    let relayer_repository = Arc::new(InMemoryRelayerRepository::new());
-    let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
-    let signer_repository = Arc::new(InMemorySignerRepository::new());
-    let notification_repository = Arc::new(InMemoryNotificationRepository::new());
-
-    let queue = Queue::setup().await;
-    let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
-
-    let app_state = web::ThinData(AppState {
-        relayer_repository,
-        transaction_repository,
-        signer_repository,
-        notification_repository,
-        job_producer,
-    });
-
-    Ok(app_state)
-}
-
 #[actix_web::main]
 async fn main() -> Result<()> {
     // Initialize error reporting with eyre
@@ -126,10 +91,13 @@ async fn main() -> Result<()> {
     let app_state = initialize_app_state().await?;
 
     // Setup workers for processing jobs
-    setup_workers(app_state.clone()).await?;
+    initialize_workers(app_state.clone()).await?;
 
     info!("Processing config file");
     process_config_file(config_file, app_state.clone()).await?;
+
+    // Initialize relayers: sync and validate relayers
+    initialize_relayers(app_state.clone()).await?;
 
     // Rate limit configuration
     let rate_limit_config = GovernorConfigBuilder::default()

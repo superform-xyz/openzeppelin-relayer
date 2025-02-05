@@ -50,11 +50,12 @@ reqwest = { version = "0.12", features = ["json"] }
 base64 = { version =  "0.22" }
 hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
+dashmap = { version = "6.1" }
 actix-governor = "0.8"
 governor = "0.8.0"
 
 [dev-dependencies]
-cargo-llvm-cov = "0.5"
+cargo-llvm-cov = "0.6"
 mockall = "0.13.1"
 mockito = "1.6.1"
 proptest = "1.6.0"
