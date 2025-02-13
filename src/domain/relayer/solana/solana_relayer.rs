@@ -19,7 +19,7 @@ use crate::{
         produce_relayer_disabled_payload, RelayerNetworkPolicy, RelayerRepoModel,
         RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaNetwork,
     },
-    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
+    repositories::{InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryStorage},
     services::{SolanaProvider, SolanaProviderTrait},
 };
 use async_trait::async_trait;
@@ -33,7 +33,7 @@ pub struct SolanaRelayer {
     relayer: RelayerRepoModel,
     network: SolanaNetwork,
     provider: Arc<SolanaProvider>,
-    relayer_repository: Arc<InMemoryRelayerRepository>,
+    relayer_repository: Arc<RelayerRepositoryStorage>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
 }
@@ -41,8 +41,8 @@ pub struct SolanaRelayer {
 impl SolanaRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         provider: Arc<SolanaProvider>,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
@@ -54,8 +54,8 @@ impl SolanaRelayer {
         Ok(Self {
             relayer,
             network,
-            provider,
             relayer_repository,
+            provider,
             transaction_repository,
             job_producer,
         })

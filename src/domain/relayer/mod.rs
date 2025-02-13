@@ -17,13 +17,12 @@ use crate::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
         SignerRepoModel, TransactionRepoModel,
     },
+    repositories::RelayerRepositoryStorage,
     services::{get_solana_network_provider_from_str, EvmSignerFactory, TransactionCounterService},
 };
 
 use crate::{
-    repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-    },
+    repositories::{InMemoryTransactionCounter, InMemoryTransactionRepository},
     services::EvmProvider,
 };
 use async_trait::async_trait;
@@ -163,7 +162,7 @@ pub trait RelayerFactoryTrait {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -175,7 +174,7 @@ impl RelayerFactoryTrait for RelayerFactory {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -219,8 +218,8 @@ impl RelayerFactoryTrait for RelayerFactory {
 
                 let relayer = SolanaRelayer::new(
                     relayer,
-                    solana_provider,
                     relayer_repository,
+                    solana_provider,
                     transaction_repository,
                     job_producer,
                 )?;
@@ -296,7 +295,7 @@ pub struct JsonRpcError {
     pub data: Option<serde_json::Value>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct BalanceResponse {
     pub balance: u128,
     pub unit: String,
