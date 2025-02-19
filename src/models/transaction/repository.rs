@@ -168,3 +168,9 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
         }
     }
 }
+
+impl TransactionRepoModel {
+    pub fn validate(&self) -> Result<(), TransactionError> {
+        Ok(())
+    }
+}
