@@ -275,7 +275,7 @@ mod tests {
         // Create test relayer
         let relayer = RelayerRepoModel {
             id: "id".to_string(),
-            name: format!("Relayer",),
+            name: "Relayer".to_string(),
             network: "TestNet".to_string(),
             paused: false,
             network_type: NetworkType::Solana,
@@ -712,7 +712,7 @@ mod tests {
 
         mock_provider
             .expect_send_transaction()
-            .returning(move |_| Box::pin(async move { Ok(expected_signature.clone()) }));
+            .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
 
         let provider = Arc::new(mock_provider);
         let rpc = SolanaRpcMethodsImpl::new_mock(relayer, provider, signer);
