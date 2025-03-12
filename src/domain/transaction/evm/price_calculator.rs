@@ -173,11 +173,14 @@ impl PriceCalculator {
             .ok_or(TransactionError::NotSupported(
                 "Speed is required".to_string(),
             ))?;
+        // Use EIP1559 by default unless explicitly disabled or on legacy network
+        let use_legacy = relayer.policies.get_evm_policy().eip1559_pricing == Some(false)
+            || gas_price_service.network().is_legacy();
 
-        if relayer.policies.get_evm_policy().eip1559_pricing {
-            Self::handle_eip1559_speed(speed, gas_price_service).await
-        } else {
+        if use_legacy {
             Self::handle_legacy_speed(speed, gas_price_service).await
+        } else {
+            Self::handle_eip1559_speed(speed, gas_price_service).await
         }
     }
 
@@ -522,7 +525,7 @@ mod tests {
         // Update policies with new EVM policy
         let evm_policy = RelayerEvmPolicy {
             gas_price_cap: Some(10000000000),
-            eip1559_pricing: true,
+            eip1559_pricing: Some(true),
             ..RelayerEvmPolicy::default()
         };
         relayer.policies = crate::models::RelayerNetworkPolicy::Evm(evm_policy);
