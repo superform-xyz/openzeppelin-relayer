@@ -1,0 +1,43 @@
+{
+  "relayers": [
+    {
+      "id": "solana-example",
+      "name": "Solana Example",
+      "network": "devnet",
+      "paused": false,
+      "signer_id": "local-vault",
+      "network_type": "solana",
+      "policies": {
+        "min_balance": 0,
+        "allowed_tokens": [
+          {
+            "mint": "So11111111111111111111111111111111111111112"
+          }
+        ]
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
+      "signing_key": {
+        "type": "env",
+        "name": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "local-vault",
+      "type": "vault",
+      "config": {
+        "address": "http://localhost:8200",
+        "role_id": "REPLACE_WITH_YOUR_ROLE_ID",
+        "secret_id": "REPLACE_WITH_YOUR_SECRET_ID",
+        "key_name": "my-app"
+      }
+    }
+  ]
+}
