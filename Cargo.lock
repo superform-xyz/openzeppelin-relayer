@@ -3966,6 +3966,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "libsodium-sys"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b779387cd56adfbc02ea4a668e704f729be8d6a6abd2c27ca5ee537849a92fd"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "walkdir",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4538,6 +4550,7 @@ dependencies = [
  "hmac 0.12.1",
  "itertools 0.14.0",
  "lazy_static",
+ "libsodium-sys",
  "log",
  "mockall",
  "mockito",
@@ -4552,6 +4565,7 @@ dependencies = [
  "redis 0.28.2",
  "regex",
  "reqwest 0.12.14",
+ "secrets",
  "serde",
  "serde_json",
  "serial_test",
@@ -4563,6 +4577,7 @@ dependencies = [
  "spl-token",
  "strum 0.26.3",
  "strum_macros 0.26.4",
+ "subtle",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.12",
@@ -4572,6 +4587,7 @@ dependencies = [
  "validator",
  "vaultrs",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]
@@ -5775,6 +5791,17 @@ dependencies = [
  "pkcs8",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "secrets"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f51745a213c4a2acabad80cd511e40376996bc83db6ceb4ebc7853d41c597988"
+dependencies = [
+ "libc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
