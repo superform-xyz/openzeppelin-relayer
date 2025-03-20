@@ -128,6 +128,8 @@ mod tests {
             sent_at: Some(now.clone()),
             confirmed_at: None,
             relayer_id: "relayer1".to_string(),
+            priced_at: None,
+            hashes: vec![],
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 hash: Some("0xabc123".to_string()),
                 gas_price: Some(20_000_000_000),
@@ -180,6 +182,8 @@ mod tests {
             sent_at: Some(now.clone()),
             confirmed_at: Some(now.clone()),
             relayer_id: "relayer2".to_string(),
+            priced_at: None,
+            hashes: vec![],
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
                 hash: Some("solana_hash_123".to_string()),
                 recent_blockhash: Some("blockhash123".to_string()),
@@ -217,6 +221,8 @@ mod tests {
             sent_at: Some(now.clone()),
             confirmed_at: Some(now.clone()),
             relayer_id: "relayer3".to_string(),
+            priced_at: None,
+            hashes: vec![],
             network_data: NetworkTransactionData::Stellar(StellarTransactionData {
                 hash: Some("stellar_hash_123".to_string()),
                 source_account: "source_account_id".to_string(),
@@ -256,6 +262,8 @@ mod tests {
             sent_at: None,
             confirmed_at: None,
             relayer_id: "relayer2".to_string(),
+            priced_at: None,
+            hashes: vec![],
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
                 hash: None,
                 recent_blockhash: None, // Testing the default case
