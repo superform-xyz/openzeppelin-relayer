@@ -27,6 +27,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
+#[cfg(test)]
+use mockall::automock;
 use std::sync::Arc;
 
 mod evm;
@@ -40,6 +42,7 @@ pub use stellar::*;
 pub use util::*;
 
 /// A trait that defines the operations for handling transactions across different networks.
+#[cfg_attr(test, automock)]
 #[async_trait]
 #[allow(dead_code)]
 pub trait Transaction {
