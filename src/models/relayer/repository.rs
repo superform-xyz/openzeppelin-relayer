@@ -221,6 +221,7 @@ pub struct RelayerRepoModel {
     pub address: String,
     pub notification_id: Option<String>,
     pub system_disabled: bool,
+    pub custom_rpc_urls: Option<Vec<String>>,
 }
 
 impl RelayerRepoModel {
@@ -234,6 +235,24 @@ impl RelayerRepoModel {
         }
 
         Ok(())
+    }
+}
+
+impl Default for RelayerRepoModel {
+    fn default() -> Self {
+        Self {
+            id: "".to_string(),
+            name: "".to_string(),
+            network: "".to_string(),
+            paused: false,
+            network_type: NetworkType::Evm,
+            signer_id: "".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0x".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        }
     }
 }
 
@@ -253,6 +272,7 @@ mod tests {
             signer_id: "test_signer".to_string(),
             address: "0x".to_string(),
             notification_id: None,
+            custom_rpc_urls: None,
         }
     }
 

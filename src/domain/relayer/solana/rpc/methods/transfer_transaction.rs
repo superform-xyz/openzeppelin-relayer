@@ -683,6 +683,7 @@ mod tests {
             address: Keypair::new().pubkey().to_string(),
             notification_id: None,
             system_disabled: false,
+            custom_rpc_urls: None,
         };
         // Create token account with low balance
         let token_account = spl_token::state::Account {
