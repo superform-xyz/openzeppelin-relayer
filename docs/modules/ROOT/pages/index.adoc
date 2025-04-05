@@ -419,7 +419,7 @@ There are 3 important sections in this file:
 
 - Signers: Defines transaction signing methods.
 - Notifications: Sets up status alerts
-- Relayers: Configures networks, noftications channels, policies & singers.
+- Relayers: Configures networks, notifications channels, policies & singers.
 
 
 ==== 1. Signers
@@ -753,9 +753,19 @@ Policies
 |Minimum balance (in lamports or wei) required for the relayer to operate. Optional.
 
 |solana
-|max_allowed_transfer_amount_lamports
+|fee_payment_strategy
+|enum(user,relayer)
+|Specifies who pays the fee. "user" (default) means the sender pays; "relayer" means the relayer pays. For "user", RPC methods add an instruction to transfer SPL tokens (calculated from the current SOL price plus a configurable margin) from the user to the relayer, ensuring fees are sustainably covered in tokens rather than SOL.
+
+|solana
+|fee_margin_percentage
+|f32
+|Additional margin percentage added to estimated transaction fees to account for price fluctuations. For example, a value of 10 will add 10% to estimated fees. Optional.
+
+|solana
+|max_allowed_fee_lamports
 |unsigned 64
-|Maximum allowed transfer amount (in lamports) for a transaction. Optional.
+|Maximum allowed fee (in lamports) for a transaction. Optional.
 
 |solana
 |allowed_tokens
@@ -829,6 +839,7 @@ Full `config/config.json` example with evm and solana relayers definitions using
       "network_type": "solana",
       "custom_rpc_urls": ["https://your-private-solana-rpc.example.com"],
       "policies": {
+        "fee_payment_strategy": "user",
         "min_balance": 0,
         "allowed_tokens": [
           {

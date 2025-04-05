@@ -39,8 +39,21 @@ pub struct AllowedToken {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigFileRelayerSolanaFeePaymentStrategy {
+    User,
+    Relayer,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerSolanaPolicy {
+    /// Determines if the relayer pays the transaction fee or the user. Optional.
+    pub fee_payment_strategy: Option<ConfigFileRelayerSolanaFeePaymentStrategy>,
+
+    /// Fee margin percentage for the relayer. Optional.
+    pub fee_margin_percentage: Option<f32>,
+
     /// Minimum balance required for the relayer (in lamports). Optional.
     pub min_balance: Option<u64>,
 
@@ -65,8 +78,8 @@ pub struct ConfigFileRelayerSolanaPolicy {
     /// Maximum supported signatures. Optional.
     pub max_signatures: Option<u8>,
 
-    /// Maximum allowed transfer amount (in lamports) for a transaction. Optional.
-    pub max_allowed_transfer_amount_lamports: Option<u64>,
+    /// Maximum allowed fee (in lamports) for a transaction. Optional.
+    pub max_allowed_fee_lamports: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -247,6 +260,20 @@ impl RelayerFileConfig {
         Ok(())
     }
 
+    fn validate_solana_fee_margin_percentage(
+        &self,
+        fee_margin_percentage: Option<f32>,
+    ) -> Result<(), ConfigFileError> {
+        if let Some(value) = fee_margin_percentage {
+            if value < 0f32 {
+                return Err(ConfigFileError::InvalidPolicy(
+                    "Negative values are not accepted".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_policies(&self) -> Result<(), ConfigFileError> {
         match self.network_type {
             ConfigFileNetworkType::Solana => {
@@ -261,6 +288,7 @@ impl RelayerFileConfig {
                     });
                     self.validate_solana_pub_keys(&allowed_token_keys)?;
                     self.validate_solana_pub_keys(&policy.allowed_programs)?;
+                    self.validate_solana_fee_margin_percentage(policy.fee_margin_percentage)?;
                     // check if both allowed_accounts and disallowed_accounts are present
                     if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
                         return Err(ConfigFileError::InvalidPolicy(
