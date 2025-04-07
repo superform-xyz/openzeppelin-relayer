@@ -1,6 +1,6 @@
 ---
-name: openzeppelin-relayer
-title: OpenZeppelin Relayer
+name: relayer
+title: Relayer
 version: 0.1.0
 nav:
   - modules/ROOT/nav.adoc
