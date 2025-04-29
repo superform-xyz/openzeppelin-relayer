@@ -4,44 +4,74 @@ use std::sync::Arc;
 
 use crate::{
     domain::transaction::Transaction,
-    jobs::JobProducer,
-    models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
+    jobs::{JobProducer, JobProducerTrait},
+    models::{NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        Repository, TransactionRepository,
     },
+    services::{Signer, StellarSigner},
 };
 
 #[allow(dead_code)]
-pub struct StellarRelayerTransaction {
+pub struct StellarRelayerTransaction<R, T, J, S>
+where
+    R: Repository<RelayerRepoModel, String>,
+    T: TransactionRepository,
+    J: JobProducerTrait,
+    S: Signer,
+{
     relayer: RelayerRepoModel,
-    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-    transaction_repository: Arc<InMemoryTransactionRepository>,
-    job_producer: Arc<JobProducer>,
+    relayer_repository: Arc<R>,
+    transaction_repository: Arc<T>,
+    job_producer: Arc<J>,
+    signer: Arc<S>,
 }
 
 #[allow(dead_code)]
-impl StellarRelayerTransaction {
+impl<R, T, J, S> StellarRelayerTransaction<R, T, J, S>
+where
+    R: Repository<RelayerRepoModel, String>,
+    T: TransactionRepository,
+    J: JobProducerTrait,
+    S: Signer,
+{
     pub fn new(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
-        job_producer: Arc<JobProducer>,
+        relayer_repository: Arc<R>,
+        transaction_repository: Arc<T>,
+        job_producer: Arc<J>,
+        signer: Arc<S>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer_repository,
             transaction_repository,
             relayer,
             job_producer,
+            signer,
         })
     }
 }
 
 #[async_trait]
-impl Transaction for StellarRelayerTransaction {
+impl<R, T, J, S> Transaction for StellarRelayerTransaction<R, T, J, S>
+where
+    R: Repository<RelayerRepoModel, String> + Send + Sync,
+    T: TransactionRepository + Send + Sync,
+    J: JobProducerTrait + Send + Sync,
+    S: Signer + Send + Sync,
+{
     async fn prepare_transaction(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        let _signature = self
+            .signer
+            .sign_transaction(NetworkTransactionData::Stellar(
+                tx.network_data.get_stellar_transaction_data()?,
+            ))
+            .await?;
+
         Ok(tx)
     }
 
@@ -95,3 +125,10 @@ impl Transaction for StellarRelayerTransaction {
         Ok(true)
     }
 }
+
+pub type DefaultStellarTransaction = StellarRelayerTransaction<
+    RelayerRepositoryStorage<InMemoryRelayerRepository>,
+    InMemoryTransactionRepository,
+    JobProducer,
+    StellarSigner,
+>;
