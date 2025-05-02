@@ -19,6 +19,7 @@ pub struct EvmTransactionResponse {
     #[schema(nullable = false)]
     pub hash: Option<String>,
     pub status: TransactionStatus,
+    pub status_reason: Option<String>,
     pub created_at: String,
     #[schema(nullable = false)]
     pub sent_at: Option<String>,
@@ -79,6 +80,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     id: model.id,
                     hash: evm_data.hash,
                     status: model.status,
+                    status_reason: model.status_reason,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
@@ -135,6 +137,7 @@ mod tests {
         let model = TransactionRepoModel {
             id: "tx123".to_string(),
             status: TransactionStatus::Pending,
+            status_reason: None,
             created_at: now.clone(),
             sent_at: Some(now.clone()),
             confirmed_at: None,
@@ -191,6 +194,7 @@ mod tests {
         let model = TransactionRepoModel {
             id: "tx456".to_string(),
             status: TransactionStatus::Confirmed,
+            status_reason: None,
             created_at: now.clone(),
             sent_at: Some(now.clone()),
             confirmed_at: Some(now.clone()),
@@ -232,6 +236,7 @@ mod tests {
         let model = TransactionRepoModel {
             id: "tx789".to_string(),
             status: TransactionStatus::Failed,
+            status_reason: None,
             created_at: now.clone(),
             sent_at: Some(now.clone()),
             confirmed_at: Some(now.clone()),
@@ -279,6 +284,7 @@ mod tests {
         let model = TransactionRepoModel {
             id: "tx456".to_string(),
             status: TransactionStatus::Pending,
+            status_reason: None,
             created_at: now.clone(),
             sent_at: None,
             confirmed_at: None,
