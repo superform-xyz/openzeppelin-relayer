@@ -14,7 +14,7 @@
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, SolanaNetwork,
+        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, SolanaNetwork, StellarNetwork,
         TransactionError, TransactionRepoModel,
     },
     repositories::{
@@ -432,7 +432,13 @@ impl RelayerTransactionFactory {
             NetworkType::Stellar => {
                 let signer_service =
                     Arc::new(StellarSignerFactory::create_stellar_signer(&signer)?);
-                let stellar_provider = StellarProvider::new(&relayer.network)
+
+                let network = match StellarNetwork::from_network_str(&relayer.network) {
+                    Ok(network) => network,
+                    Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
+                };
+
+                let stellar_provider = StellarProvider::new(network.public_rpc_urls()[0])
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
@@ -442,6 +448,7 @@ impl RelayerTransactionFactory {
                     job_producer,
                     signer_service,
                     stellar_provider,
+                    transaction_counter_store,
                 )?))
             }
         }

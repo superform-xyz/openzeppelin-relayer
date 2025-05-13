@@ -17,7 +17,7 @@ use crate::{
     models::{
         DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, SolanaNetwork, TransactionError, TransactionRepoModel,
+        SignerRepoModel, SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -25,7 +25,7 @@ use crate::{
     },
     services::{
         get_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
-        TransactionCounterService,
+        StellarProvider, TransactionCounterService,
     },
 };
 
@@ -358,10 +358,26 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Solana(relayer))
             }
             NetworkType::Stellar => {
+                let network = match StellarNetwork::from_network_str(&relayer.network) {
+                    Ok(network) => network,
+                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
+                };
+
+                let stellar_provider = StellarProvider::new(network.public_rpc_urls()[0])
+                    .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+
+                let transaction_counter_service = Arc::new(TransactionCounterService::new(
+                    relayer.id.clone(),
+                    relayer.address.clone(),
+                    transaction_counter_store,
+                ));
+
                 let relayer = DefaultStellarRelayer::new(
                     relayer,
+                    stellar_provider,
                     relayer_repository,
                     transaction_repository,
+                    transaction_counter_service,
                     job_producer,
                 )?;
                 Ok(NetworkRelayer::Stellar(relayer))
