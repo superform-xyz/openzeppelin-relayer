@@ -13,6 +13,7 @@ on:
       - docs/**
       - '**.md'
       - .github/**
+      - .gitignore
   push:
     branches:
       - main
@@ -52,6 +53,8 @@ jobs:
               - 'Cargo.toml'
             docker:
               - 'Dockerfile.development'
+              - 'Dockerfile.production'
+              - 'docker-compose.yml'
               - 'Cargo.lock'
               - 'Cargo.toml'
             tests:
@@ -246,8 +249,8 @@ jobs:
     needs:
       - changed_files
       - ci
-      - test
-    if: ${{ needs.changed_files.outputs.changed-docker-files == 'true' }}
+    if: |
+      ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-docker-files == 'true' }}
     steps:
       # Checkout the repository
       - name: Checkout Code
