@@ -4821,7 +4821,6 @@ dependencies = [
  "eyre",
  "futures",
  "google-cloud-auth",
- "governor 0.8.1",
  "hex",
  "hmac 0.12.1",
  "http 1.3.1",
