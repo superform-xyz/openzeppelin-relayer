@@ -1,10 +1,16 @@
+//! This module is responsible for executing a typescript script.
+//!
+//! 1. Checks if `ts-node` is installed.
+//! 2. Executes the script using the `ts-node` command.
+//! 3. Returns the output and errors of the script.
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use tokio::process::Command;
+use utoipa::ToSchema;
 
 use super::PluginError;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Log,
@@ -15,13 +21,13 @@ pub enum LogLevel {
     Result,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, ToSchema)]
 pub struct LogEntry {
     pub level: LogLevel,
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, ToSchema)]
 pub struct ScriptResult {
     pub logs: Vec<LogEntry>,
     pub error: String,
