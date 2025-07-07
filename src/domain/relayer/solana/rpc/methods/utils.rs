@@ -23,9 +23,8 @@
 //!
 //! The implementation leverages the Jupiter API for token price quotes and the Solana
 //! SDK for transaction manipulation.
+use super::*;
 use std::str::FromStr;
-
-use super::{token::SolanaTokenProgram, *};
 
 use log::debug;
 use solana_sdk::{
@@ -37,9 +36,9 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::Signature,
     system_instruction::SystemInstruction,
-    system_program,
     transaction::Transaction,
 };
+use solana_system_interface::program;
 
 use spl_token::{amount_to_ui_amount, state::Account};
 
@@ -47,6 +46,7 @@ use crate::{
     constants::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, NATIVE_SOL, SOLANA_DECIMALS, WRAPPED_SOL_MINT,
     },
+    domain::{SolanaTokenProgram, TokenInstruction},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
@@ -225,7 +225,7 @@ where
 
             // Check if the instruction comes from the System Program (native SOL transfers)
             #[allow(clippy::collapsible_match)]
-            if program_id == system_program::id() {
+            if program_id == program::id() {
                 if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
                     if let SystemInstruction::Transfer { lamports } = system_ix {
                         // In a system transfer instruction, the first account is the source and the
@@ -303,7 +303,9 @@ where
 
         // Get slippage from policy
         let slippage = token_entry
-            .conversion_slippage_percentage
+            .swap_config
+            .as_ref()
+            .and_then(|config| config.slippage_percentage)
             .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE);
 
         // Get Jupiter quote
@@ -437,16 +439,9 @@ where
             SolanaTokenProgram::get_associated_token_address(&program_id, destination, token_mint);
 
         // Verify source account and balance
-        let source_account = self
-            .provider
-            .get_account_from_pubkey(&source_ata)
-            .await
-            .map_err(|e| {
-                SolanaRpcError::TokenAccount(format!("Invalid source token account: {}", e))
-            })?;
-
         let unpacked_source_account =
-            SolanaTokenProgram::unpack_account(&program_id, &source_account)?;
+            SolanaTokenProgram::get_and_unpack_token_account(&*self.provider, source, token_mint)
+                .await?;
 
         if unpacked_source_account.amount < amount {
             return Err(SolanaRpcError::InsufficientFunds(format!(
@@ -714,7 +709,7 @@ where
             let program_id = transaction.message.account_keys[ix.program_id_index as usize];
 
             // Check if it's system program
-            if program_id == system_program::id() {
+            if program_id == program::id() {
                 if let Ok(SystemInstruction::Transfer { lamports }) =
                     bincode::deserialize::<SystemInstruction>(&ix.data)
                 {
@@ -891,8 +886,11 @@ mod tests {
 
     use crate::{
         constants::WRAPPED_SOL_MINT,
-        models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
-        services::QuoteResponse,
+        models::{
+            RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            SolanaAllowedTokensSwapConfig,
+        },
+        services::{QuoteResponse, RoutePlan, SwapInfo},
     };
 
     use super::*;
@@ -900,8 +898,8 @@ mod tests {
         instruction::AccountMeta,
         signature::{Keypair, Signature},
         signer::Signer,
-        system_instruction,
     };
+    use solana_system_interface::instruction;
     use spl_associated_token_account::{
         get_associated_token_address, instruction::create_associated_token_account,
     };
@@ -912,7 +910,7 @@ mod tests {
             setup_test_context();
         let relayer_pubkey = Pubkey::from_str(&relayer.address).unwrap();
         let recipient = Pubkey::new_unique();
-        let instruction = system_instruction::transfer(&relayer_pubkey, &recipient, 1000);
+        let instruction = instruction::transfer(&relayer_pubkey, &recipient, 1000);
         let message = Message::new(&[instruction], Some(&relayer_pubkey));
         let transaction = Transaction::new_unsigned(message);
         signer.expect_sign().returning(move |_| {
@@ -952,7 +950,10 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -987,7 +988,10 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -1003,6 +1007,24 @@ mod tests {
                         out_amount: 2_000_000, // 1 SOL = 2 USDC
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: SwapInfo {
+                                amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(),
+                                label: "Stabble Stable Swap".to_string(),
+                                input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                                    .to_string(),
+                                output_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                                in_amount: "1000000".to_string(),
+                                out_amount: "999984".to_string(),
+                                fee_amount: "10".to_string(),
+                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                            },
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -1045,7 +1067,7 @@ mod tests {
         // Create simple transfer transaction
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&payer.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
 
@@ -1189,8 +1211,7 @@ mod tests {
 
         let recipient = Pubkey::new_unique();
         let transfer_amount = 1_000_000;
-        let ix =
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient, transfer_amount);
+        let ix = instruction::transfer(&relayer_keypair.pubkey(), &recipient, transfer_amount);
         let message = Message::new(&[ix], Some(&relayer_keypair.pubkey()));
         let transaction = Transaction::new_unsigned(message);
 
@@ -1226,8 +1247,8 @@ mod tests {
         let amount2 = 2_000_000;
 
         let instructions = vec![
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient1, amount1),
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient2, amount2),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient1, amount1),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient2, amount2),
         ];
 
         let message = Message::new(&instructions, Some(&relayer_keypair.pubkey()));
@@ -1265,8 +1286,8 @@ mod tests {
         let other_amount = 2_000_000;
 
         let instructions = vec![
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient, relayer_amount),
-            system_instruction::transfer(&other_keypair.pubkey(), &recipient, other_amount),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient, relayer_amount),
+            instruction::transfer(&other_keypair.pubkey(), &recipient, other_amount),
         ];
 
         let message = Message::new(&instructions, Some(&relayer_keypair.pubkey()));
@@ -1352,7 +1373,7 @@ mod tests {
             Arc::new(job_producer),
         );
 
-        let instructions = vec![system_instruction::transfer(
+        let instructions = vec![instruction::transfer(
             &relayer_keypair.pubkey(),
             &recipient,
             amount,
@@ -1400,8 +1421,8 @@ mod tests {
         let recipient2 = Pubkey::new_unique();
 
         let instructions = vec![
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient1, 1000),
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient2, 2000),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient1, 1000),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient2, 2000),
         ];
 
         let result = rpc.create_and_sign_transaction(instructions).await;
@@ -1531,7 +1552,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             fee_margin_percentage: None,
             ..Default::default()
@@ -1581,7 +1604,8 @@ mod tests {
     async fn test_estimate_and_convert_fee_token_with_margin() {
         let (mut relayer, signer, mut provider, mut jupiter_service, tx, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC token mint
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -1589,7 +1613,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -1610,6 +1636,24 @@ mod tests {
                         out_amount: 2_000_000, // 1 SOL = 2 USDC
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: SwapInfo {
+                                amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(),
+                                label: "Stabble Stable Swap".to_string(),
+                                input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                                    .to_string(),
+                                output_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                                in_amount: "1000000".to_string(),
+                                out_amount: "999984".to_string(),
+                                fee_amount: "10".to_string(),
+                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                            },
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -1736,7 +1780,7 @@ mod tests {
         let recipient = Pubkey::new_unique();
         let amount = 1_000_000;
 
-        let transfer_ix = system_instruction::transfer(&payer.pubkey(), &recipient, amount);
+        let transfer_ix = instruction::transfer(&payer.pubkey(), &recipient, amount);
 
         let message = Message::new(&[transfer_ix.clone()], Some(&payer.pubkey()));
 
@@ -1747,7 +1791,7 @@ mod tests {
             &message.account_keys,
             &message.header,
         );
-        assert_eq!(converted_ix.program_id, system_program::id());
+        assert_eq!(converted_ix.program_id, program::id());
 
         let decoded_ix = bincode::deserialize::<SystemInstruction>(&converted_ix.data).unwrap();
         match decoded_ix {
@@ -1880,7 +1924,8 @@ mod tests {
     async fn test_create_transaction_with_user_fee_payment_token() {
         let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC token mint
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -1888,7 +1933,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -1950,7 +1997,7 @@ mod tests {
             Arc::new(job_producer),
         );
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&user_pubkey, &recipient, 1000);
+        let ix = instruction::transfer(&user_pubkey, &recipient, 1000);
         let message = Message::new(&[ix], Some(&user_pubkey));
         let transaction = Transaction::new_unsigned(message);
 
@@ -1982,7 +2029,7 @@ mod tests {
             let program_idx = ix.program_id_index as usize;
 
             if program_idx < modified_tx.message.account_keys.len()
-                && modified_tx.message.account_keys[program_idx] == system_program::id()
+                && modified_tx.message.account_keys[program_idx] == program::id()
             {
                 if let Ok(SystemInstruction::Transfer { lamports }) = bincode::deserialize(&ix.data)
                 {
@@ -2063,7 +2110,7 @@ mod tests {
         );
 
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&relayer_keypair.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&relayer_keypair.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&relayer_keypair.pubkey()));
         let transaction = Transaction::new_unsigned(message);
 
@@ -2094,7 +2141,8 @@ mod tests {
     async fn test_create_transaction_with_user_fee_payment_insufficient_balance() {
         let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC token mint
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -2102,7 +2150,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -2165,7 +2215,7 @@ mod tests {
         );
         // Create a simple transaction from user
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&user_pubkey, &recipient, 1000);
+        let ix = instruction::transfer(&user_pubkey, &recipient, 1000);
         let message = Message::new(&[ix], Some(&user_pubkey));
         let transaction = Transaction::new_unsigned(message);
 
@@ -2211,10 +2261,10 @@ mod tests {
         let fee_amount = 5000;
 
         let payment_ix =
-            system_instruction::transfer(&payer.pubkey(), &relayer_keypair.pubkey(), fee_amount);
+            instruction::transfer(&payer.pubkey(), &relayer_keypair.pubkey(), fee_amount);
 
         let recipient = Pubkey::new_unique();
-        let regular_ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let regular_ix = instruction::transfer(&payer.pubkey(), &recipient, 1000);
 
         let message = Message::new(&[payment_ix, regular_ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
@@ -2246,11 +2296,8 @@ mod tests {
         let required_amount = 5000;
 
         // Create SOL transfer to relayer instruction
-        let payment_ix = system_instruction::transfer(
-            &payer.pubkey(),
-            &relayer_keypair.pubkey(),
-            payment_amount,
-        );
+        let payment_ix =
+            instruction::transfer(&payer.pubkey(), &relayer_keypair.pubkey(), payment_amount);
 
         let message = Message::new(&[payment_ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
@@ -2275,7 +2322,8 @@ mod tests {
     async fn test_confirm_user_fee_payment_token_sufficient() {
         let (mut relayer, signer, mut provider, mut jupiter_service, _, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC token mint
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -2283,7 +2331,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -2311,6 +2361,24 @@ mod tests {
                         out_amount: amount * 2, // 1 SOL = 2 USDC
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: SwapInfo {
+                                amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(),
+                                label: "Stabble Stable Swap".to_string(),
+                                input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                                    .to_string(),
+                                output_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                                in_amount: "1000000".to_string(),
+                                out_amount: "999984".to_string(),
+                                fee_amount: "10".to_string(),
+                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                            },
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -2398,7 +2466,7 @@ mod tests {
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
 
-        let regular_ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let regular_ix = instruction::transfer(&payer.pubkey(), &recipient, 1000);
 
         let message = Message::new(&[regular_ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
@@ -2420,7 +2488,8 @@ mod tests {
     async fn test_find_token_payments_to_relayer() {
         let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC mint address
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         // Setup policy with token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -2429,7 +2498,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });

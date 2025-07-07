@@ -1,5 +1,5 @@
 # Base image
-FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev AS base
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS base
 
 USER root
 RUN apk update && apk --no-cache add \
@@ -12,16 +12,39 @@ WORKDIR /usr/app
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo install --root /usr/app --path . --locked
-
+    cargo install --root /usr/app --path . --debug --locked
 
 # Setting up build directories
-FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/glibc-dynamic:latest
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
+
+# Install plugin dependencies
+ARG TARGETARCH
+ARG NODE_VERSION=20.19
+
+# Install Node.js
+USER root
+RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
+ENV PATH="/usr/local/bin:$PATH"
+
+RUN npm install -g pnpm ts-node typescript
+
+# removes apk and unneeded wolfi-base tools.
+RUN apk del wolfi-base apk-tools
+
+# Copy plugins folder and install dependencies
+COPY --chown=nonroot:nonroot ./plugins /app/plugins
+
+USER nonroot
+WORKDIR /app/plugins
+RUN pnpm install --frozen-lockfile
+
+# Return to app root
+WORKDIR /app
 
 ENV APP_PORT=8080
 ENV METRICS_PORT=8081

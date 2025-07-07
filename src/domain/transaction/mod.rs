@@ -14,16 +14,16 @@
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, TransactionError,
-        TransactionRepoModel,
+        EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel, SignerRepoModel,
+        SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
+        InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
     services::{
-        get_network_extra_fee_calculator_service, get_solana_network_provider, EvmGasPriceService,
-        EvmProvider, EvmSignerFactory, StellarProvider, StellarSignerFactory,
+        get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
+        EvmSignerFactory, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -32,15 +32,17 @@ use eyre::Result;
 use mockall::automock;
 use std::sync::Arc;
 
-mod evm;
-mod solana;
-mod stellar;
-mod util;
+pub mod evm;
+pub mod solana;
+pub mod stellar;
 
-pub use evm::*;
-pub use solana::*;
-pub use stellar::*;
+mod util;
 pub use util::*;
+
+// Explicit re-exports to avoid ambiguous glob re-exports
+pub use evm::{DefaultEvmTransaction, EvmRelayerTransaction};
+pub use solana::SolanaRelayerTransaction;
+pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 
 /// A trait that defines the operations for handling transactions across different networks.
 #[cfg_attr(test, automock)]
@@ -122,14 +124,16 @@ pub trait Transaction {
     ///
     /// # Arguments
     ///
-    /// * `tx` - A `TransactionRepoModel` representing the transaction to be replaced.
+    /// * `old_tx` - A `TransactionRepoModel` representing the transaction to be replaced.
+    /// * `new_tx_request` - A `NetworkTransactionRequest` representing the new transaction data.
     ///
     /// # Returns
     ///
     /// A `Result` containing the new `TransactionRepoModel` or a `TransactionError`.
     async fn replace_transaction(
         &self,
-        tx: TransactionRepoModel,
+        old_tx: TransactionRepoModel,
+        new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError>;
 
     /// Signs a transaction.
@@ -275,19 +279,25 @@ impl Transaction for NetworkTransaction {
     ///
     /// # Arguments
     ///
-    /// * `tx` - A `TransactionRepoModel` representing the transaction to be replaced.
+    /// * `old_tx` - A `TransactionRepoModel` representing the transaction to be replaced.
+    /// * `new_tx_request` - A `NetworkTransactionRequest` representing the new transaction data.
     ///
     /// # Returns
     ///
     /// A `Result` containing the new `TransactionRepoModel` or a `TransactionError`.
     async fn replace_transaction(
         &self,
-        tx: TransactionRepoModel,
+        old_tx: TransactionRepoModel,
+        new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
         match self {
-            NetworkTransaction::Evm(relayer) => relayer.replace_transaction(tx).await,
+            NetworkTransaction::Evm(relayer) => {
+                relayer.replace_transaction(old_tx, new_tx_request).await
+            }
             NetworkTransaction::Solana(_) => solana_not_supported_transaction(),
-            NetworkTransaction::Stellar(relayer) => relayer.replace_transaction(tx).await,
+            NetworkTransaction::Stellar(relayer) => {
+                relayer.replace_transaction(old_tx, new_tx_request).await
+            }
         }
     }
 
@@ -374,42 +384,37 @@ impl RelayerTransactionFactory {
     /// # Returns
     ///
     /// A `Result` containing the created `NetworkTransaction` or a `TransactionError`.
-    pub fn create_transaction(
+    pub async fn create_transaction(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
+        network_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError> {
         match relayer.network_type {
             NetworkType::Evm => {
-                let network = match EvmNetwork::from_network_str(&relayer.network) {
-                    Ok(network) => network,
-                    Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
-                };
-
-                let rpc_url = relayer
-                    .custom_rpc_urls
-                    .as_ref()
-                    .and_then(|urls| urls.first().cloned())
-                    .or_else(|| {
-                        network
-                            .public_rpc_urls()
-                            .and_then(|urls| urls.first().cloned())
-                            .map(String::from)
-                    })
+                let network_repo = network_repository
+                    .get(NetworkType::Evm, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
                     .ok_or_else(|| {
-                        TransactionError::NetworkConfiguration("No RPC URLs configured".to_string())
+                        TransactionError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
                     })?;
 
-                let evm_provider: EvmProvider = EvmProvider::new(&rpc_url)
+                let network = EvmNetwork::try_from(network_repo)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
-                let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
+                let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
                 let network_extra_fee_calculator =
-                    get_network_extra_fee_calculator_service(network, evm_provider.clone());
-                let price_calculator = PriceCalculator::new(
+                    get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
+                let price_calculator = evm::PriceCalculator::new(
                     EvmGasPriceService::new(evm_provider.clone(), network),
                     network_extra_fee_calculator,
                 );
@@ -419,6 +424,7 @@ impl RelayerTransactionFactory {
                         relayer,
                         evm_provider,
                         relayer_repository,
+                        network_repository,
                         transaction_repository,
                         transaction_counter_store,
                         job_producer,
@@ -428,8 +434,23 @@ impl RelayerTransactionFactory {
                 )))
             }
             NetworkType::Solana => {
-                let solana_provider = Arc::new(get_solana_network_provider(
-                    &relayer.network,
+                let network_repo = network_repository
+                    .get(NetworkType::Solana, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = SolanaNetwork::try_from(network_repo)
+                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
+
+                let solana_provider = Arc::new(get_network_provider(
+                    &network,
                     relayer.custom_rpc_urls.clone(),
                 )?);
 
@@ -444,8 +465,25 @@ impl RelayerTransactionFactory {
             NetworkType::Stellar => {
                 let signer_service =
                     Arc::new(StellarSignerFactory::create_stellar_signer(&signer)?);
-                let stellar_provider = StellarProvider::new(&relayer.network)
+
+                let network_repo = network_repository
+                    .get(NetworkType::Stellar, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = StellarNetwork::try_from(network_repo)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
+
+                let stellar_provider =
+                    get_network_provider(&network, relayer.custom_rpc_urls.clone())
+                        .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
                     relayer,
@@ -454,6 +492,7 @@ impl RelayerTransactionFactory {
                     job_producer,
                     signer_service,
                     stellar_provider,
+                    transaction_counter_store,
                 )?))
             }
         }

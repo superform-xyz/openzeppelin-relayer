@@ -4,9 +4,10 @@ use crate::{
     services::{ProviderError, SolanaProviderError},
 };
 
-use super::{ApiError, RepositoryError};
+use super::{ApiError, RepositoryError, StellarProviderError};
 use eyre::Report;
 use serde::Serialize;
+use soroban_rs::xdr;
 use thiserror::Error;
 
 #[derive(Error, Debug, Serialize)]
@@ -40,6 +41,9 @@ pub enum TransactionError {
 
     #[error("Insufficient balance: {0}")]
     InsufficientBalance(String),
+
+    #[error("Stellar transaction simulation failed: {0}")]
+    SimulationFailed(String),
 }
 
 impl From<TransactionError> for ApiError {
@@ -57,6 +61,7 @@ impl From<TransactionError> for ApiError {
             TransactionError::UnexpectedError(msg) => ApiError::InternalError(msg),
             TransactionError::SignerError(msg) => ApiError::InternalError(msg),
             TransactionError::InsufficientBalance(msg) => ApiError::BadRequest(msg),
+            TransactionError::SimulationFailed(msg) => ApiError::BadRequest(msg),
         }
     }
 }
@@ -82,6 +87,27 @@ impl From<SignerFactoryError> for TransactionError {
 impl From<SignerError> for TransactionError {
     fn from(error: SignerError) -> Self {
         TransactionError::SignerError(error.to_string())
+    }
+}
+
+impl From<StellarProviderError> for TransactionError {
+    fn from(error: StellarProviderError) -> Self {
+        match error {
+            StellarProviderError::SimulationFailed(msg) => TransactionError::SimulationFailed(msg),
+            StellarProviderError::InsufficientBalance(msg) => {
+                TransactionError::InsufficientBalance(msg)
+            }
+            StellarProviderError::BadSeq(msg) => TransactionError::ValidationError(msg),
+            StellarProviderError::RpcError(msg) | StellarProviderError::Unknown(msg) => {
+                TransactionError::UnderlyingProvider(ProviderError::NetworkConfiguration(msg))
+            }
+        }
+    }
+}
+
+impl From<xdr::Error> for TransactionError {
+    fn from(error: xdr::Error) -> Self {
+        TransactionError::ValidationError(format!("XDR error: {}", error))
     }
 }
 
@@ -120,6 +146,10 @@ mod tests {
                 TransactionError::InsufficientBalance("not enough funds".to_string()),
                 "Insufficient balance: not enough funds",
             ),
+            (
+                TransactionError::SimulationFailed("sim failed".to_string()),
+                "Stellar transaction simulation failed: sim failed",
+            ),
         ];
 
         for (error, expected_message) in test_cases {
@@ -157,6 +187,10 @@ mod tests {
             (
                 TransactionError::InsufficientBalance("not enough funds".to_string()),
                 ApiError::BadRequest("not enough funds".to_string()),
+            ),
+            (
+                TransactionError::SimulationFailed("boom".to_string()),
+                ApiError::BadRequest("boom".to_string()),
             ),
         ];
 
@@ -266,6 +300,24 @@ mod tests {
                 assert!(err.to_string().contains("queue full"));
             }
             _ => panic!("Expected TransactionError::JobProducerError"),
+        }
+    }
+
+    #[test]
+    fn test_xdr_error_conversion() {
+        use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope};
+
+        // Create an XDR error by trying to parse invalid base64
+        let xdr_error =
+            TransactionEnvelope::from_xdr_base64("invalid_base64", Limits::none()).unwrap_err();
+
+        let tx_error = TransactionError::from(xdr_error);
+
+        match tx_error {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("XDR error:"));
+            }
+            _ => panic!("Expected TransactionError::ValidationError"),
         }
     }
 }

@@ -4,7 +4,9 @@
 //! - Test (temporary private keys)
 //! - Local keystore (encrypted JSON files)
 //! - HashiCorp Vault integration
-//! - AWS KMS integration [NOT IMPLEMENTED]
+//! - Turnkey service integration
+//! - Google Cloud integration
+//! - AWS KMS integration (EVM only)
 use super::ConfigFileError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -25,8 +27,37 @@ pub use vault_transit::*;
 mod turnkey;
 pub use turnkey::*;
 
+mod google_cloud_kms;
+pub use google_cloud_kms::*;
+
+mod aws_kms;
+pub use aws_kms::*;
+
 pub trait SignerConfigValidate {
     fn validate(&self) -> Result<(), ConfigFileError>;
+}
+
+fn collect_validation_errors(errors: &validator::ValidationErrors) -> Vec<String> {
+    let mut messages = Vec::new();
+
+    for (field, field_errors) in errors.field_errors().iter() {
+        let field_msgs: Vec<String> = field_errors
+            .iter()
+            .map(|error| error.message.clone().unwrap_or_default().to_string())
+            .collect();
+        messages.push(format!("{}: {}", field, field_msgs.join(", ")));
+    }
+
+    for (struct_field, kind) in errors.errors().iter() {
+        if let validator::ValidationErrorsKind::Struct(nested) = kind {
+            let nested_msgs = collect_validation_errors(nested);
+            for msg in nested_msgs {
+                messages.push(format!("{}.{}", struct_field, msg));
+            }
+        }
+    }
+
+    messages
 }
 
 /// Validates a signer config using validator::Validate
@@ -36,23 +67,9 @@ where
 {
     match Validate::validate(config) {
         Ok(_) => Ok(()),
-        Err(errors) => {
-            // Convert validator::ValidationErrors to your ConfigFileError
-            let error_message = errors
-                .field_errors()
-                .iter()
-                .map(|(field, errors)| {
-                    let messages: Vec<String> = errors
-                        .iter()
-                        .map(|error| error.message.clone().unwrap_or_default().to_string())
-                        .collect();
-                    format!("{}: {}", field, messages.join(", "))
-                })
-                .collect::<Vec<String>>()
-                .join("; ");
-
-            Err(ConfigFileError::InvalidFormat(error_message))
-        }
+        Err(errors) => Err(ConfigFileError::InvalidFormat(
+            collect_validation_errors(&errors).join("; "),
+        )),
     }
 }
 
@@ -61,14 +78,11 @@ where
 pub struct TestSignerFileConfig {}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct AwsKmsSignerFileConfig {}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase", content = "config")]
 pub enum SignerFileConfigEnum {
     Test(TestSignerFileConfig),
     Local(LocalSignerFileConfig),
+    #[serde(rename = "aws_kms")]
     AwsKms(AwsKmsSignerFileConfig),
     Vault(VaultSignerFileConfig),
     #[serde(rename = "vault_cloud")]
@@ -76,6 +90,8 @@ pub enum SignerFileConfigEnum {
     #[serde(rename = "vault_transit")]
     VaultTransit(VaultTransitSignerFileConfig),
     Turnkey(TurnkeySignerFileConfig),
+    #[serde(rename = "google_cloud_kms")]
+    GoogleCloudKms(GoogleCloudKmsSignerFileConfig),
 }
 
 impl SignerFileConfigEnum {
@@ -127,6 +143,13 @@ impl SignerFileConfigEnum {
             _ => None,
         }
     }
+
+    pub fn get_google_cloud_kms(&self) -> Option<&GoogleCloudKmsSignerFileConfig> {
+        match self {
+            SignerFileConfigEnum::GoogleCloudKms(google_cloud_kms) => Some(google_cloud_kms),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -155,8 +178,8 @@ impl SignerFileConfig {
         match &self.config {
             SignerFileConfigEnum::Test(_) => Ok(()),
             SignerFileConfigEnum::Local(local_config) => local_config.validate(),
-            SignerFileConfigEnum::AwsKms(_) => {
-                Err(ConfigFileError::InternalError("Not implemented".into()))
+            SignerFileConfigEnum::AwsKms(aws_kms_config) => {
+                SignerConfigValidate::validate(aws_kms_config)
             }
             SignerFileConfigEnum::Vault(vault_config) => {
                 SignerConfigValidate::validate(vault_config)
@@ -169,6 +192,9 @@ impl SignerFileConfig {
             }
             SignerFileConfigEnum::Turnkey(turnkey_config) => {
                 SignerConfigValidate::validate(turnkey_config)
+            }
+            SignerFileConfigEnum::GoogleCloudKms(google_cloud_kms_config) => {
+                SignerConfigValidate::validate(google_cloud_kms_config)
             }
         }
     }
@@ -495,6 +521,74 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_google_cloud_kms_signer() {
+        let config = json!({
+            "id": "google-signer",
+            "type": "google_cloud_kms",
+            "config": {
+                "service_account": {
+                    "private_key": {
+                        "type": "plain",
+                        "value": "key"
+                    },
+                    "client_email": {
+                        "type": "plain",
+                        "value": "email"
+                    },
+                    "private_key_id": {
+                        "type": "plain",
+                        "value": "key_id"
+                    },
+                    "project_id": "id",
+                    "client_id": "client_id"
+                },
+                "key": {
+                    "key_id": "my-key",
+                    "key_ring_id": "my-keyring",
+                    "key_version": 1
+                }
+            }
+        });
+
+        let signer_config: SignerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(signer_config.validate_signer().is_ok());
+    }
+
+    #[test]
+    fn test_validate_google_cloud_kms_invalid() {
+        let config = json!({
+            "id": "google-signer",
+            "type": "google_cloud_kms",
+            "config": {
+                "service_account": {
+                    "private_key": {
+                        "type": "plain",
+                        "value": "key"
+                    },
+                    "client_email": {
+                        "type": "plain",
+                        "value": "email"
+                    },
+                    "private_key_id": {
+                        "type": "plain",
+                        "value": "key_id"
+                    },
+                    "project_id": "",
+                    "client_id": "client_id"
+                },
+                "key": {
+                    "key_id": "my-key",
+                    "key_ring_id": "my-keyring",
+                    "key_version": 1
+                }
+            }
+        });
+
+        let signer_config: SignerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(signer_config.validate_signer().is_err());
+    }
+
+    #[test]
     fn test_empty_signers_array() {
         let config = json!({
             "signers": []
@@ -584,8 +678,11 @@ mod tests {
         assert!(matches!(parsed, SignerFileConfigEnum::VaultTransit(_)));
 
         let aws_kms_config = json!({
-            "type": "awskms",
-            "config": {}
+            "type": "aws_kms",
+            "config": {
+                "region": "us-east-1",
+                "key_id": "test-key-id"
+            }
         });
         let parsed: SignerFileConfigEnum = serde_json::from_value(aws_kms_config).unwrap();
         assert!(matches!(parsed, SignerFileConfigEnum::AwsKms(_)));
@@ -602,6 +699,26 @@ mod tests {
         });
         let parsed: SignerFileConfigEnum = serde_json::from_value(turnkey_config).unwrap();
         assert!(matches!(parsed, SignerFileConfigEnum::Turnkey(_)));
+
+        let google_config = json!({
+            "type": "google_cloud_kms",
+            "config": {
+                "service_account": {
+                    "private_key": {"type": "plain", "value": "key"},
+                    "client_email": {"type": "plain", "value": "email"},
+                    "private_key_id": {"type": "plain", "value": "key_id"},
+                    "project_id": "id",
+                    "client_id": "client_id"
+                },
+                "key": {
+                    "key_id": "my-key",
+                    "key_ring_id": "my-keyring",
+                    "key_version": 1
+                }
+            }
+        });
+        let parsed: SignerFileConfigEnum = serde_json::from_value(google_config).unwrap();
+        assert!(matches!(parsed, SignerFileConfigEnum::GoogleCloudKms(_)));
     }
 
     #[test]
@@ -614,6 +731,7 @@ mod tests {
         assert!(test_config.get_vault_transit().is_none());
         assert!(test_config.get_aws_kms().is_none());
         assert!(test_config.get_turnkey().is_none());
+        assert!(test_config.get_google_cloud_kms().is_none());
 
         let local_config = SignerFileConfigEnum::Local(LocalSignerFileConfig {
             path: "test-path".to_string(),
@@ -628,6 +746,7 @@ mod tests {
         assert!(local_config.get_vault_transit().is_none());
         assert!(local_config.get_aws_kms().is_none());
         assert!(local_config.get_turnkey().is_none());
+        assert!(local_config.get_google_cloud_kms().is_none());
 
         let vault_config = SignerFileConfigEnum::Vault(VaultSignerFileConfig {
             address: "https://vault.example.com".to_string(),
@@ -648,6 +767,7 @@ mod tests {
         assert!(vault_config.get_vault_transit().is_none());
         assert!(vault_config.get_aws_kms().is_none());
         assert!(vault_config.get_turnkey().is_none());
+        assert!(vault_config.get_google_cloud_kms().is_none());
 
         let vault_cloud_config = SignerFileConfigEnum::VaultCloud(VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
@@ -687,8 +807,12 @@ mod tests {
         assert!(vault_transit_config.get_vault_transit().is_some());
         assert!(vault_transit_config.get_aws_kms().is_none());
         assert!(vault_transit_config.get_turnkey().is_none());
+        assert!(vault_transit_config.get_google_cloud_kms().is_none());
 
-        let aws_kms_config = SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {});
+        let aws_kms_config = SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {
+            region: Some("us-east-1".to_string()),
+            key_id: "test-key-id".to_string(),
+        });
         assert!(aws_kms_config.get_test().is_none());
         assert!(aws_kms_config.get_local().is_none());
         assert!(aws_kms_config.get_vault().is_none());
@@ -696,8 +820,9 @@ mod tests {
         assert!(aws_kms_config.get_vault_transit().is_none());
         assert!(aws_kms_config.get_aws_kms().is_some());
         assert!(aws_kms_config.get_turnkey().is_none());
+        assert!(aws_kms_config.get_google_cloud_kms().is_none());
 
-        let aws_kms_config = SignerFileConfigEnum::Turnkey(TurnkeySignerFileConfig {
+        let turnkey_config = SignerFileConfigEnum::Turnkey(TurnkeySignerFileConfig {
             api_private_key: PlainOrEnvValue::Plain {
                 value: SecretString::new("role-123"),
             },
@@ -706,12 +831,49 @@ mod tests {
             private_key_id: "private_key_id".to_string(),
             public_key: "public_key".to_string(),
         });
-        assert!(aws_kms_config.get_test().is_none());
-        assert!(aws_kms_config.get_local().is_none());
-        assert!(aws_kms_config.get_vault().is_none());
-        assert!(aws_kms_config.get_vault_cloud().is_none());
-        assert!(aws_kms_config.get_vault_transit().is_none());
-        assert!(aws_kms_config.get_aws_kms().is_none());
-        assert!(aws_kms_config.get_turnkey().is_some());
+        assert!(turnkey_config.get_test().is_none());
+        assert!(turnkey_config.get_local().is_none());
+        assert!(turnkey_config.get_vault().is_none());
+        assert!(turnkey_config.get_vault_cloud().is_none());
+        assert!(turnkey_config.get_vault_transit().is_none());
+        assert!(turnkey_config.get_aws_kms().is_none());
+        assert!(turnkey_config.get_turnkey().is_some());
+        assert!(turnkey_config.get_google_cloud_kms().is_none());
+
+        let google_cloud_kms_config =
+            SignerFileConfigEnum::GoogleCloudKms(GoogleCloudKmsSignerFileConfig {
+                service_account: ServiceAccountConfig {
+                    private_key: PlainOrEnvValue::Plain {
+                        value: SecretString::new("key"),
+                    },
+                    client_email: PlainOrEnvValue::Plain {
+                        value: SecretString::new("email"),
+                    },
+                    private_key_id: PlainOrEnvValue::Plain {
+                        value: SecretString::new("key_id"),
+                    },
+                    project_id: "id".to_string(),
+                    client_id: "client_id".to_string(),
+                    auth_uri: "uri".to_string(),
+                    token_uri: "uri".to_string(),
+                    client_x509_cert_url: "uri".to_string(),
+                    auth_provider_x509_cert_url: "uri".to_string(),
+                    universe_domain: "uri".to_string(),
+                },
+                key: KmsKeyConfig {
+                    location: "global".to_string(),
+                    key_id: "my-key".to_string(),
+                    key_ring_id: "my-keyring".to_string(),
+                    key_version: 1,
+                },
+            });
+        assert!(google_cloud_kms_config.get_test().is_none());
+        assert!(google_cloud_kms_config.get_local().is_none());
+        assert!(google_cloud_kms_config.get_vault().is_none());
+        assert!(google_cloud_kms_config.get_vault_cloud().is_none());
+        assert!(google_cloud_kms_config.get_vault_transit().is_none());
+        assert!(google_cloud_kms_config.get_aws_kms().is_none());
+        assert!(google_cloud_kms_config.get_turnkey().is_none());
+        assert!(google_cloud_kms_config.get_google_cloud_kms().is_some());
     }
 }

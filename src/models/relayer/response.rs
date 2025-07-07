@@ -3,19 +3,51 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::{
-    RelayerNetworkPolicy, RelayerRepoModel, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+    RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaSwapConfig, SolanaAllowedTokensPolicy,
+    SolanaFeePaymentStrategy,
 };
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct DeletePendingTransactionsResponse {
+    pub queued_for_cancellation_transaction_ids: Vec<String>,
+    pub failed_to_queue_transaction_ids: Vec<String>,
+    pub total_processed: u32,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct RelayerResponse {
     pub id: String,
     pub name: String,
     pub network: String,
+    #[serde(rename = "network_type")]
     pub network_type: NetworkType,
     pub paused: bool,
     pub policies: NetworkPolicyResponse,
     pub address: String,
     pub system_disabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(tag = "network_type")]
+pub enum RelayerStatus {
+    #[serde(rename = "evm")]
+    Evm {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        nonce: String,
+    },
+    #[serde(rename = "stellar")]
+    Stellar {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        sequence_number: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -66,6 +98,9 @@ pub struct SolanaPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub max_allowed_fee_lamports: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub swap_config: Option<RelayerSolanaSwapConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -98,6 +133,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size,
                     max_allowed_fee_lamports: solana.max_allowed_fee_lamports,
+                    swap_config: solana.swap_config,
                 })
             }
             RelayerNetworkPolicy::Stellar(stellar) => {
@@ -124,7 +160,8 @@ impl From<RelayerRepoModel> for RelayerResponse {
 #[cfg(test)]
 mod tests {
     use crate::models::{
-        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaFeePaymentStrategy,
+        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaAllowedTokensSwapConfig,
+        SolanaFeePaymentStrategy,
     };
 
     use super::*;
@@ -148,7 +185,7 @@ mod tests {
             system_disabled: false,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
-            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
+            custom_rpc_urls: None,
         };
 
         let response: RelayerResponse = model.clone().into();
@@ -193,7 +230,12 @@ mod tests {
                     decimals: Some(9),
                     symbol: Some("SOL".to_string()),
                     max_allowed_fee: Some(1000),
-                    conversion_slippage_percentage: Some(100.0),
+                    swap_config: Some(SolanaAllowedTokensSwapConfig {
+                        slippage_percentage: Some(100.0),
+                        max_amount: None,
+                        min_amount: None,
+                        retain_min_amount: None,
+                    }),
                 }]),
                 allowed_programs: Some(vec!["program1".to_string()]),
                 allowed_accounts: Some(vec!["account1".to_string()]),
@@ -201,12 +243,13 @@ mod tests {
                 max_signatures: Some(10),
                 max_tx_data_size: 1024,
                 max_allowed_fee_lamports: Some(10000),
+                swap_config: None,
             }),
             address: "solana-address".to_string(),
             system_disabled: false,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
-            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
+            custom_rpc_urls: None,
         };
 
         let response: RelayerResponse = model.clone().into();
@@ -257,7 +300,7 @@ mod tests {
             system_disabled: true,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
-            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
+            custom_rpc_urls: None,
         };
 
         let response: RelayerResponse = model.clone().into();

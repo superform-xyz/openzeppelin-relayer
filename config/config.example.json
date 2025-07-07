@@ -13,6 +13,15 @@
       }
     },
     {
+      "id": "stellar-example",
+      "name": "Stellar Example",
+      "network": "testnet",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "local-signer",
+      "network_type": "stellar"
+    },
+    {
       "id": "solana-example",
       "name": "Solana Example",
       "network": "devnet",
@@ -23,14 +32,21 @@
       "policies": {
         "fee_payment_strategy": "user",
         "min_balance": 0,
-        "allowed_programs": [
-          "11111111111111111111111111111111",
-          "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        ],
+        "swap_config": {
+          "strategy": "jupiter-swap",
+          "cron_schedule": "0 0 * * *",
+          "min_balance_threshold": 0
+        },
+        "allowed_programs": ["11111111111111111111111111111111", "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
         "allowed_tokens": [
           {
             "mint": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr",
-            "max_allowed_fee": 100000000
+            "max_allowed_fee": 100000000,
+            "swap_config": {
+              "min_amount": 0,
+              "max_amount": 0,
+              "retain_min_amount": 0
+            }
           },
           {
             "mint": "So11111111111111111111111111111111111111112"
@@ -83,5 +99,7 @@
         }
       }
     }
-  ]
+  ],
+  "networks": "./config/networks",
+  "plugins": []
 }

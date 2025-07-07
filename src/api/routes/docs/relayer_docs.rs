@@ -1,11 +1,12 @@
 use crate::{
     domain::{
-        BalanceResponse, JsonRpcRequest, JsonRpcResponse, RelayerUpdateRequest, SignDataRequest,
-        SignDataResponse, SignTypedDataRequest,
+        BalanceResponse, RelayerUpdateRequest, SignDataRequest, SignDataResponse,
+        SignTypedDataRequest,
     },
     models::{
-        ApiResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
-        RelayerResponse, TransactionResponse,
+        ApiResponse, DeletePendingTransactionsResponse, JsonRpcRequest, JsonRpcResponse,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, RelayerResponse,
+        RelayerStatus, TransactionResponse,
     },
 };
 /// Relayer routes implementation
@@ -232,7 +233,7 @@ fn doc_update_relayer() {}
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
     responses(
-        (status = 200, description = "Relayer status retrieved successfully", body = ApiResponse<bool>),
+        (status = 200, description = "Relayer status retrieved successfully", body = ApiResponse<RelayerStatus>),
         (
             status = 400,
             description = "BadRequest",
@@ -651,7 +652,7 @@ fn doc_list_transactions() {}
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
     responses(
-        (status = 200, description = "Relayer pending transactions successfully", body = ApiResponse<String>),
+        (status = 200, description = "Relayer pending transactions successfully", body = ApiResponse<DeletePendingTransactionsResponse>),
         (
             status = 400,
             description = "BadRequest",
@@ -790,6 +791,7 @@ fn doc_cancel_transaction() {}
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
         ("transaction_id" = String, Path, description = "The unique identifier of the transaction")
     ),
+    request_body = NetworkTransactionRequest,
     responses(
         (status = 200, description = "Relayer transaction replaced successfully", body = ApiResponse<TransactionResponse>),
         (

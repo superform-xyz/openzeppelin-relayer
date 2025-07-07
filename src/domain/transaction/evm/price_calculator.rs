@@ -12,7 +12,7 @@
 //! - Network-specific block time considerations for fee estimations
 //!
 //! # Example
-//! ```no_run
+//! ```rust, ignore
 //! # use your_crate::{PriceCalculator, EvmTransactionData, RelayerRepoModel, EvmGasPriceService};
 //! # async fn example<P: EvmProviderTrait>(
 //! #     tx_data: &EvmTransactionData,
@@ -38,7 +38,7 @@ use crate::{
     constants::DEFAULT_TRANSACTION_SPEED,
     models::{
         evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
-        TransactionError, TransactionRepoModel, U256,
+        TransactionError, U256,
     },
     services::{
         gas::{EvmGasPriceServiceTrait, NetworkExtraFeeCalculatorServiceTrait},
@@ -63,7 +63,7 @@ pub trait PriceCalculatorTrait: Send + Sync {
 
     async fn calculate_bumped_gas_price(
         &self,
-        tx: &TransactionRepoModel,
+        tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
     ) -> Result<PriceParams, TransactionError>;
 }
@@ -74,7 +74,6 @@ const PRECISION: u128 = 1_000_000_000; // 10^9 (similar to Gwei)
 const MINUTE_AND_HALF_MS: u128 = 90000;
 const BASE_FEE_INCREASE_FACTOR_PERCENT: u128 = 125; // 12.5% increase per block (as percentage * 10)
 const MAX_BASE_FEE_MULTIPLIER: u128 = 10 * PRECISION; // 10.0 * PRECISION
-const MIN_BUMP_PERCENT: u128 = 10;
 
 #[derive(Debug, Clone)]
 pub struct PriceParams {
@@ -103,6 +102,30 @@ impl PriceParams {
     }
 }
 
+/// Safely calculates the minimum required gas price for a replacement transaction.
+/// Uses saturating arithmetic to prevent overflow and maintains precision.
+///
+/// # Arguments
+///
+/// * `base_price` - The original gas price to calculate bump from
+///
+/// # Returns
+///
+/// The minimum required price for replacement, or `u128::MAX` if overflow would occur.
+pub fn calculate_min_bump(base_price: u128) -> u128 {
+    // Convert MIN_BUMP_FACTOR to a rational representation to avoid floating point precision issues
+    // MIN_BUMP_FACTOR = 1.1 = 11/10
+    const BUMP_NUMERATOR: u128 = 11;
+    const BUMP_DENOMINATOR: u128 = 10;
+
+    let bumped_price = base_price
+        .saturating_mul(BUMP_NUMERATOR)
+        .saturating_div(BUMP_DENOMINATOR);
+
+    // Ensure we always bump by at least 1 wei to guarantee replacement
+    std::cmp::max(bumped_price, base_price.saturating_add(1))
+}
+
 /// Primary struct for calculating gas prices with an injected `EvmGasPriceServiceTrait`.
 pub struct PriceCalculator<G: EvmGasPriceServiceTrait> {
     gas_price_service: G,
@@ -121,10 +144,10 @@ impl<G: EvmGasPriceServiceTrait + Send + Sync> PriceCalculatorTrait for PriceCal
 
     async fn calculate_bumped_gas_price(
         &self,
-        tx: &TransactionRepoModel,
+        tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
     ) -> Result<PriceParams, TransactionError> {
-        self.calculate_bumped_gas_price(tx, relayer).await
+        self.calculate_bumped_gas_price(tx_data, relayer).await
     }
 }
 
@@ -215,10 +238,9 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
     /// the calculated gas parameters meet the minimum bump requirements.
     pub async fn calculate_bumped_gas_price(
         &self,
-        tx: &TransactionRepoModel,
+        tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
     ) -> Result<PriceParams, TransactionError> {
-        let evm_data = tx.network_data.get_evm_transaction_data()?;
         let network_gas_prices = self.gas_price_service.get_prices_from_json_rpc().await?;
         let relayer_gas_price_cap = relayer
             .policies
@@ -228,16 +250,16 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
 
         // Decide EIP1559 vs Legacy based on presence of maxFeePerGas / maxPriorityFeePerGas vs gasPrice
         let bumped_price_params = match (
-            evm_data.max_fee_per_gas,
-            evm_data.max_priority_fee_per_gas,
-            evm_data.gas_price,
+            tx_data.max_fee_per_gas,
+            tx_data.max_priority_fee_per_gas,
+            tx_data.gas_price,
         ) {
             (Some(max_fee), Some(max_priority_fee), _) => {
                 // EIP1559
                 self.handle_eip1559_bump(
                     &network_gas_prices,
                     relayer_gas_price_cap,
-                    evm_data.speed.as_ref(),
+                    tx_data.speed.as_ref(),
                     max_fee,
                     max_priority_fee,
                 )?
@@ -247,7 +269,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
                 self.handle_legacy_bump(
                     &network_gas_prices,
                     relayer_gas_price_cap,
-                    evm_data.speed.as_ref(),
+                    tx_data.speed.as_ref(),
                     gas_price,
                 )?
             }
@@ -260,14 +282,14 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
 
         // Add extra fee if needed
         let mut final_params = bumped_price_params;
-        let value = evm_data.value;
-        let gas_limit = evm_data.gas_limit;
-        let is_eip1559 = evm_data.is_eip1559();
+        let value = tx_data.value;
+        let gas_limit = tx_data.gas_limit;
+        let is_eip1559 = tx_data.is_eip1559();
 
         match &self.network_extra_fee_calculator_service {
             NetworkExtraFeeCalculator::None => {}
             _ => {
-                let new_tx = evm_data.with_price_params(final_params.clone());
+                let new_tx = tx_data.clone().with_price_params(final_params.clone());
                 let extra_fee = self
                     .network_extra_fee_calculator_service
                     .get_extra_fee(&new_tx)
@@ -308,8 +330,8 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         let speed = maybe_speed.unwrap_or(&DEFAULT_TRANSACTION_SPEED);
 
         // Calculate the minimum required fees (10% increase over previous values)
-        let min_bump_max_fee = Self::calculate_min_bump(max_fee);
-        let min_bump_max_priority = Self::calculate_min_bump(max_priority_fee);
+        let min_bump_max_fee = calculate_min_bump(max_fee);
+        let min_bump_max_priority = calculate_min_bump(max_priority_fee);
 
         // Get the current market priority fee for the given speed.
         let current_market_priority =
@@ -377,7 +399,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         let speed = maybe_speed.unwrap_or(&Speed::Fast);
 
         // Minimum bump
-        let min_bump_gas_price = Self::calculate_min_bump(gas_price);
+        let min_bump_gas_price = calculate_min_bump(gas_price);
 
         // Current market gas price for chosen speed
         let current_market_price =
@@ -587,10 +609,6 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         }
     }
 
-    fn calculate_min_bump(previous_price: u128) -> u128 {
-        (previous_price * (100 + MIN_BUMP_PERCENT)) / 100
-    }
-
     fn cap_gas_price(price: u128, cap: u128) -> u128 {
         std::cmp::min(price, cap)
     }
@@ -666,9 +684,8 @@ fn calculate_max_fee_per_gas(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::NetworkTransactionData;
     use crate::models::{
-        evm::Speed, EvmNamedNetwork, EvmNetwork, EvmTransactionData, NetworkType, RelayerEvmPolicy,
+        evm::Speed, EvmNetwork, EvmTransactionData, NetworkType, RelayerEvmPolicy,
         RelayerNetworkPolicy, RelayerRepoModel, U256,
     };
     use crate::services::{
@@ -676,6 +693,26 @@ mod tests {
         SpeedPrices,
     };
     use futures::FutureExt;
+
+    fn create_mock_evm_network(name: &str) -> EvmNetwork {
+        let average_blocktime_ms = match name {
+            "optimism" => 2000, // 2 seconds for optimism to test max cap
+            _ => 12000,         // 12 seconds for mainnet and others
+        };
+
+        EvmNetwork {
+            network: name.to_string(),
+            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms,
+            is_testnet: true,
+            tags: vec![],
+            chain_id: 1337,
+            required_confirmations: 1,
+            features: vec![],
+            symbol: "ETH".to_string(),
+        }
+    }
 
     fn create_mock_relayer() -> RelayerRepoModel {
         RelayerRepoModel {
@@ -702,7 +739,7 @@ mod tests {
 
         let relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
 
         let tx_data = EvmTransactionData {
             gas_price: Some(20000000000),
@@ -734,7 +771,7 @@ mod tests {
 
         let relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -770,8 +807,7 @@ mod tests {
             .returning(|| async { Ok(20000000000) }.boxed());
 
         let relayer = create_mock_relayer();
-        let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Celo));
+        let gas_price_service = EvmGasPriceService::new(provider, create_mock_evm_network("celo"));
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -807,7 +843,7 @@ mod tests {
 
         let relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -838,7 +874,7 @@ mod tests {
 
         let mut relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
 
         // Update policies with new EVM policy
         let evm_policy = RelayerEvmPolicy {
@@ -868,12 +904,12 @@ mod tests {
 
     #[test]
     fn test_get_base_fee_multiplier() {
-        let mainnet = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        let mainnet = create_mock_evm_network("mainnet");
         let multiplier = super::get_base_fee_multiplier(&mainnet);
         // 90s with ~12s blocks = ~7.5 blocks => ~2.4 multiplier
         assert!(multiplier > 2_300_000_000 && multiplier < 2_500_000_000);
 
-        let optimism = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
+        let optimism = create_mock_evm_network("optimism");
         let multiplier = super::get_base_fee_multiplier(&optimism);
         // 2s block time => ~45 blocks => capped at 10.0
         assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
@@ -881,7 +917,7 @@ mod tests {
 
     #[test]
     fn test_calculate_max_fee_per_gas() {
-        let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        let network = create_mock_evm_network("mainnet");
         let base_fee = 100_000_000_000u128; // 100 Gwei
         let priority_fee = 2_000_000_000u128; // 2 Gwei
 
@@ -929,7 +965,7 @@ mod tests {
             });
 
         // Mock the network method
-        let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        let network = create_mock_evm_network("mainnet");
         mock_gas_price_service
             .expect_network()
             .return_const(network);
@@ -980,7 +1016,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
@@ -990,20 +1026,17 @@ mod tests {
             ..Default::default()
         });
 
-        let tx = TransactionRepoModel {
-            network_data: {
-                let evm_data = EvmTransactionData {
-                    max_fee_per_gas: Some(100_000_000_000),
-                    max_priority_fee_per_gas: Some(2_000_000_000),
-                    speed: Some(Speed::Fast),
-                    ..Default::default()
-                };
-                NetworkTransactionData::Evm(evm_data)
-            },
+        let tx_data = EvmTransactionData {
+            max_fee_per_gas: Some(100_000_000_000),
+            max_priority_fee_per_gas: Some(2_000_000_000),
+            speed: Some(Speed::Fast),
             ..Default::default()
         };
 
-        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        let bumped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
         assert!(bumped.max_fee_per_gas.unwrap() >= 110_000_000_000); // >= 10% bump
         assert!(bumped.max_priority_fee_per_gas.unwrap() >= 2_200_000_000); // >= 10% bump
     }
@@ -1029,27 +1062,24 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let relayer = create_mock_relayer();
 
         // Old max_priority_fee: 2.0 Gwei, new market is 1.5 Gwei (less)
         // Should use min bump (2.2 Gwei) instead
-        let tx = TransactionRepoModel {
-            network_data: {
-                let evm_data = EvmTransactionData {
-                    max_fee_per_gas: Some(20_000_000_000),
-                    max_priority_fee_per_gas: Some(2_000_000_000),
-                    speed: Some(Speed::SafeLow),
-                    ..Default::default()
-                };
-                NetworkTransactionData::Evm(evm_data)
-            },
+        let tx_data = EvmTransactionData {
+            max_fee_per_gas: Some(20_000_000_000),
+            max_priority_fee_per_gas: Some(2_000_000_000),
+            speed: Some(Speed::SafeLow),
             ..Default::default()
         };
 
-        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        let bumped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
         assert!(bumped.max_priority_fee_per_gas.unwrap() >= 2_200_000_000);
         assert!(bumped.max_fee_per_gas.unwrap() > 20_000_000_000);
     }
@@ -1075,23 +1105,20 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let relayer = create_mock_relayer();
-        let tx = TransactionRepoModel {
-            network_data: {
-                let evm_data = EvmTransactionData {
-                    gas_price: Some(10_000_000_000),
-                    speed: Some(Speed::Fast),
-                    ..Default::default()
-                };
-                NetworkTransactionData::Evm(evm_data)
-            },
+        let tx_data = EvmTransactionData {
+            gas_price: Some(10_000_000_000),
+            speed: Some(Speed::Fast),
             ..Default::default()
         };
 
-        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        let bumped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
         assert!(bumped.gas_price.unwrap() >= 11_000_000_000); // at least 10% bump
     }
 
@@ -1108,20 +1135,14 @@ mod tests {
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let relayer = create_mock_relayer();
         // Both max_fee_per_gas, max_priority_fee_per_gas, and gas_price absent
-        let tx = TransactionRepoModel {
-            network_data: {
-                let evm_data = EvmTransactionData {
-                    gas_price: None,
-                    max_fee_per_gas: None,
-                    max_priority_fee_per_gas: None,
-                    ..Default::default()
-                };
-                NetworkTransactionData::Evm(evm_data)
-            },
+        let tx_data = EvmTransactionData {
+            gas_price: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
             ..Default::default()
         };
 
-        let result = pc.calculate_bumped_gas_price(&tx, &relayer).await;
+        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
         assert!(result.is_err());
         if let Err(TransactionError::InvalidType(msg)) = result {
             assert!(msg.contains("missing required gas price parameters"));
@@ -1151,7 +1172,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
@@ -1160,21 +1181,18 @@ mod tests {
             ..Default::default()
         });
 
-        let tx = TransactionRepoModel {
-            network_data: {
-                let evm_data = EvmTransactionData {
-                    max_fee_per_gas: Some(90_000_000_000),
-                    max_priority_fee_per_gas: Some(4_000_000_000),
-                    speed: Some(Speed::Fastest),
-                    ..Default::default()
-                };
-                NetworkTransactionData::Evm(evm_data)
-            },
+        let tx_data = EvmTransactionData {
+            max_fee_per_gas: Some(90_000_000_000),
+            max_priority_fee_per_gas: Some(4_000_000_000),
+            speed: Some(Speed::Fastest),
             ..Default::default()
         };
 
         // Normally, we'd expect ~ (100 Gwei * 2.4) + 8 Gwei > 248 Gwei. We'll cap it at 105 Gwei.
-        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        let bumped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
         assert!(bumped.max_fee_per_gas.unwrap() <= 105_000_000_000);
         assert!(bumped.max_priority_fee_per_gas.unwrap() <= 105_000_000_000);
     }
@@ -1200,7 +1218,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
@@ -1211,20 +1229,17 @@ mod tests {
             ..Default::default()
         });
 
-        let tx = TransactionRepoModel {
-            network_data: {
-                let evm_data = EvmTransactionData {
-                    max_fee_per_gas: Some(50_000_000_000),
-                    max_priority_fee_per_gas: Some(2_000_000_000),
-                    speed: Some(Speed::Fast),
-                    ..Default::default()
-                };
-                NetworkTransactionData::Evm(evm_data)
-            },
+        let tx_data = EvmTransactionData {
+            max_fee_per_gas: Some(50_000_000_000),
+            max_priority_fee_per_gas: Some(2_000_000_000),
+            speed: Some(Speed::Fast),
             ..Default::default()
         };
 
-        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        let bumped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
         assert_eq!(
             bumped.is_min_bumped,
             Some(true),
@@ -1237,20 +1252,17 @@ mod tests {
             ..Default::default()
         });
 
-        let tx = TransactionRepoModel {
-            network_data: {
-                let evm_data = EvmTransactionData {
-                    max_fee_per_gas: Some(50_000_000_000),
-                    max_priority_fee_per_gas: Some(2_000_000_000),
-                    speed: Some(Speed::Fast),
-                    ..Default::default()
-                };
-                NetworkTransactionData::Evm(evm_data)
-            },
+        let tx_data = EvmTransactionData {
+            max_fee_per_gas: Some(50_000_000_000),
+            max_priority_fee_per_gas: Some(2_000_000_000),
+            speed: Some(Speed::Fast),
             ..Default::default()
         };
 
-        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        let bumped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
         // Since min bump is 10%, original was 50 Gwei, min is 55 Gwei, but cap is 50 Gwei
         assert_eq!(
             bumped.is_min_bumped,
@@ -1280,7 +1292,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
@@ -1291,19 +1303,16 @@ mod tests {
             ..Default::default()
         });
 
-        let tx = TransactionRepoModel {
-            network_data: {
-                let evm_data = EvmTransactionData {
-                    gas_price: Some(10_000_000_000),
-                    speed: Some(Speed::Fast),
-                    ..Default::default()
-                };
-                NetworkTransactionData::Evm(evm_data)
-            },
+        let tx_data = EvmTransactionData {
+            gas_price: Some(10_000_000_000),
+            speed: Some(Speed::Fast),
             ..Default::default()
         };
 
-        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        let bumped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
         assert_eq!(
             bumped.is_min_bumped,
             Some(true),
@@ -1316,7 +1325,10 @@ mod tests {
             ..Default::default()
         });
 
-        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        let bumped = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
         assert_eq!(
             bumped.is_min_bumped,
             Some(false),
@@ -1346,27 +1358,22 @@ mod tests {
             });
         mock_gas_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         // Create a PriceCalculator without extra fee service first
         let pc = PriceCalculator::new(mock_gas_service, NetworkExtraFeeCalculator::None);
 
         // Create test transaction and relayer
         let relayer = create_mock_relayer();
-        let tx = TransactionRepoModel {
-            network_data: {
-                NetworkTransactionData::Evm(EvmTransactionData {
-                    max_fee_per_gas: Some(50_000_000_000),
-                    max_priority_fee_per_gas: Some(2_000_000_000),
-                    speed: Some(Speed::Fast),
-                    ..Default::default()
-                })
-            },
+        let tx_data = EvmTransactionData {
+            max_fee_per_gas: Some(50_000_000_000),
+            max_priority_fee_per_gas: Some(2_000_000_000),
+            speed: Some(Speed::Fast),
             ..Default::default()
         };
 
         // Call the method under test
-        let result = pc.calculate_bumped_gas_price(&tx, &relayer).await;
+        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
 
         // Verify extra fee is None when no extra fee service is used
         assert!(result.is_ok());
@@ -1396,7 +1403,7 @@ mod tests {
             });
         mock_gas_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         // Create mock extra fee service
         let mut mock_extra_fee_service = MockNetworkExtraFeeCalculatorServiceTrait::new();
@@ -1415,20 +1422,15 @@ mod tests {
 
         // Create test transaction and relayer
         let relayer = create_mock_relayer();
-        let tx = TransactionRepoModel {
-            network_data: {
-                NetworkTransactionData::Evm(EvmTransactionData {
-                    max_fee_per_gas: Some(50_000_000_000),
-                    max_priority_fee_per_gas: Some(2_000_000_000),
-                    speed: Some(Speed::Fast),
-                    ..Default::default()
-                })
-            },
+        let tx_data = EvmTransactionData {
+            max_fee_per_gas: Some(50_000_000_000),
+            max_priority_fee_per_gas: Some(2_000_000_000),
+            speed: Some(Speed::Fast),
             ..Default::default()
         };
 
         // Call the method under test
-        let result = pc.calculate_bumped_gas_price(&tx, &relayer).await;
+        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
 
         // Verify extra fee was properly included
         assert!(result.is_ok());
@@ -1546,5 +1548,94 @@ mod tests {
 
         let eip1559_total = price_params.calculate_total_cost(true, gas_limit, value);
         assert_eq!(eip1559_total, value);
+    }
+
+    #[test]
+    fn test_calculate_min_bump_normal_cases() {
+        let base_price = 20_000_000_000u128; // 20 Gwei
+        let expected = 22_000_000_000u128; // 22 Gwei (10% bump)
+        assert_eq!(calculate_min_bump(base_price), expected);
+
+        let base_price = 1_000_000_000u128;
+        let expected = 1_100_000_000u128; // 1.1 Gwei
+        assert_eq!(calculate_min_bump(base_price), expected);
+
+        let base_price = 100_000_000_000u128;
+        let expected = 110_000_000_000u128; // 110 Gwei
+        assert_eq!(calculate_min_bump(base_price), expected);
+    }
+
+    #[test]
+    fn test_calculate_min_bump_edge_cases() {
+        // Test with zero - should return 1 wei (minimum bump)
+        assert_eq!(calculate_min_bump(0), 1);
+
+        // Test with 1 wei - should return at least 2 wei
+        let result = calculate_min_bump(1);
+        assert!(result >= 2);
+
+        // Test with very small values where 10% bump rounds down to 0
+        let base_price = 5u128; // 5 wei
+        let result = calculate_min_bump(base_price);
+        assert!(
+            result > base_price,
+            "Result {} should be greater than base_price {}",
+            result,
+            base_price
+        );
+
+        let base_price = 9u128;
+        let result = calculate_min_bump(base_price);
+        assert_eq!(
+            result, 10u128,
+            "9 wei should bump to 10 wei (minimum 1 wei increase)"
+        );
+    }
+
+    #[test]
+    fn test_calculate_min_bump_large_values() {
+        // Test with large values to ensure no overflow
+        let base_price = u128::MAX / 2;
+        let result = calculate_min_bump(base_price);
+        assert!(result > base_price);
+
+        // Test near maximum value
+        let base_price = u128::MAX - 1000;
+        let result = calculate_min_bump(base_price);
+        // Should not panic and should return a reasonable value
+        assert!(result >= base_price.saturating_add(1));
+    }
+
+    #[test]
+    fn test_calculate_min_bump_overflow_protection() {
+        let base_price = u128::MAX;
+        let result = calculate_min_bump(base_price);
+        assert_eq!(result, u128::MAX);
+
+        let base_price = (u128::MAX / 11) * 10 + 1;
+        let result = calculate_min_bump(base_price);
+        assert!(result >= base_price);
+    }
+
+    #[test]
+    fn test_calculate_min_bump_minimum_increase_guarantee() {
+        // Test that the function always increases by at least 1 wei
+        let test_cases = vec![0, 1, 2, 5, 9, 10, 100, 1000, 10000];
+
+        for base_price in test_cases {
+            let result = calculate_min_bump(base_price);
+            assert!(
+                result > base_price,
+                "calculate_min_bump({}) = {} should be greater than base_price",
+                base_price,
+                result
+            );
+            assert!(
+                result >= base_price.saturating_add(1),
+                "calculate_min_bump({}) = {} should be at least base_price + 1",
+                base_price,
+                result
+            );
+        }
     }
 }

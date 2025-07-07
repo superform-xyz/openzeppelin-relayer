@@ -1,8 +1,9 @@
 //! Test setup for solana rpc methods
 use solana_sdk::{
     hash::Hash, message::Message, pubkey::Pubkey, signature::Keypair, signer::Signer,
-    system_instruction, transaction::Transaction,
+    transaction::Transaction,
 };
+use solana_system_interface::instruction;
 use spl_associated_token_account::get_associated_token_address;
 use std::str::FromStr;
 
@@ -10,7 +11,8 @@ use crate::{
     jobs::MockJobProducerTrait,
     models::{
         EncodedSerializedTransaction, NetworkType, RelayerNetworkPolicy, RelayerRepoModel,
-        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig,
+        SolanaFeePaymentStrategy,
     },
     services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait},
 };
@@ -30,7 +32,7 @@ pub fn setup_test_context() -> (
     let payer = Keypair::new();
     let source = Keypair::new();
     let recipient = Pubkey::new_unique();
-    let ix = system_instruction::transfer(&source.pubkey(), &recipient, 1000);
+    let ix = instruction::transfer(&source.pubkey(), &recipient, 1000);
     let message = Message::new(&[ix], Some(&payer.pubkey()));
     let transaction = Transaction::new_unsigned(message);
     // Create test relayer
@@ -51,6 +53,7 @@ pub fn setup_test_context() -> (
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
             max_tx_data_size: 1000,
+            swap_config: None,
         }),
         signer_id: "test".to_string(),
         address: payer.pubkey().to_string(),
@@ -149,6 +152,7 @@ pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContex
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
             max_tx_data_size: 1000,
+            swap_config: None,
         }),
         signer_id: "test".to_string(),
         address: relayer_keypair.pubkey().to_string(),
@@ -267,7 +271,10 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             min_balance: 10000,
             allowed_programs: None,
@@ -275,6 +282,7 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
             max_tx_data_size: 1000,
+            swap_config: None,
         }),
         signer_id: "test".to_string(),
         address: relayer_keypair.pubkey().to_string(),
@@ -331,7 +339,8 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
     let token_owner = Keypair::new(); // This will own the token account
     let relayer_keypair = Keypair::new();
 
-    let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC token mint
+    // USDC token mint
+    let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
     let token_mint = Pubkey::from_str(test_token).unwrap();
 
     let source_token_account = get_associated_token_address(&token_owner.pubkey(), &token_mint);
@@ -381,7 +390,10 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             min_balance: 10000,
             allowed_programs: None,
@@ -389,6 +401,7 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
             max_tx_data_size: 1000,
+            swap_config: None,
         }),
         signer_id: "test".to_string(),
         address: relayer_keypair.pubkey().to_string(),

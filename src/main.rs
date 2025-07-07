@@ -47,7 +47,8 @@ use std::env;
 use openzeppelin_relayer::{
     api,
     bootstrap::{
-        initialize_app_state, initialize_relayers, initialize_workers, process_config_file,
+        initialize_app_state, initialize_relayers, initialize_solana_swap_workers,
+        initialize_workers, process_config_file,
     },
     config,
     constants::PUBLIC_ENDPOINTS,
@@ -84,8 +85,11 @@ async fn main() -> Result<()> {
     info!("Processing config file");
     process_config_file(config_file, app_state.clone()).await?;
 
+    info!("Initializing relayers");
     // Initialize relayers: sync and validate relayers
     initialize_relayers(app_state.clone()).await?;
+
+    initialize_solana_swap_workers(app_state.clone()).await?;
 
     // Rate limit configuration
     let rate_limit_config = GovernorConfigBuilder::default()

@@ -155,7 +155,7 @@ mod tests {
     use crate::{
         constants::WRAPPED_SOL_MINT,
         models::{RelayerNetworkPolicy, RelayerSolanaPolicy},
-        services::QuoteResponse,
+        services::{QuoteResponse, RoutePlan, SwapInfo},
     };
 
     use super::*;
@@ -165,8 +165,8 @@ mod tests {
         program_pack::Pack,
         signature::{Keypair, Signature},
         signer::Signer,
-        system_instruction,
     };
+    use solana_system_interface::instruction;
     use spl_token::state::Account;
 
     #[tokio::test]
@@ -203,6 +203,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -319,6 +320,24 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: SwapInfo {
+                                amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(),
+                                label: "Stabble Stable Swap".to_string(),
+                                input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                                    .to_string(),
+                                output_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                                in_amount: "1000000".to_string(),
+                                out_amount: "999984".to_string(),
+                                fee_amount: "10".to_string(),
+                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                            },
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -333,6 +352,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -399,6 +419,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -520,6 +541,24 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: SwapInfo {
+                                amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(),
+                                label: "Stabble Stable Swap".to_string(),
+                                input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                                    .to_string(),
+                                output_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                                in_amount: "1000000".to_string(),
+                                out_amount: "999984".to_string(),
+                                fee_amount: "10".to_string(),
+                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                            },
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -534,6 +573,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -624,6 +664,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -678,6 +719,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -737,6 +779,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -777,7 +820,7 @@ mod tests {
         // Create transaction with different fee payer
         let wrong_fee_payer = Keypair::new();
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&wrong_fee_payer.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&wrong_fee_payer.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&wrong_fee_payer.pubkey())); // Different fee payer
         let transaction = Transaction::new_unsigned(message);
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction)
@@ -855,6 +898,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -911,6 +955,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -978,6 +1023,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });

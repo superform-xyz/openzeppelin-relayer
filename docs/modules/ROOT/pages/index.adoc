@@ -24,21 +24,46 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 - **Configurable Network Policies**: Define and enforce network-specific policies for transaction processing.
 - **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
 - **Docker Support**: Deploy the relayer using Docker for both development and production environments.
+- **Plugins**: Extend the functionality of the relayer with custom logic using TypeScript functions.
 
 
 == Supported Networks
 
-- Solana
-- EVM (Basic support for Ethereum and other EVM-compatible chains):
-  * Ethereum (Mainnet, Sepolia, Holesky)
-  * Optimism (Mainnet, Sepolia)
-  * Worldchain (Sepolia)
+OpenZeppelin Relayer supports multiple blockchain networks through a flexible JSON-based configuration system. Networks are defined in configuration files, allowing you to configure:
+
+- **Any EVM-compatible network** (Ethereum, Polygon, BSC, Arbitrum, Optimism, etc.)
+- **Solana networks** (mainnet-beta, devnet, testnet, custom RPC endpoints)
+- **Stellar networks** (Pubnet, Testnet, custom networks)
+- **Create custom network configurations** with specific RPC endpoints, chain IDs, and network parameters
+- **Use inheritance** to create network variants that inherit from base configurations
+
+=== Network Types
+
+[cols="1,2"]
+|===
+|Network Type |Description
+
+|`evm`
+|Ethereum Virtual Machine compatible networks. Supports any EVM chain by configuring chain ID, RPC URLs, and network-specific parameters.
+
+|`solana`
+|Solana blockchain networks. Supports all Solana clusters and custom RPC endpoints.
+
+|`stellar`
+|Stellar blockchain networks (Partial support). Supports Stellar Public Network and Testnet.
+|===
+
+Networks can be loaded from:
+
+- **JSON arrays**: Direct network definitions in configuration files
+- **Directory of files**: Multiple JSON files each containing network definitions
+
+For detailed network configuration options and examples, see the xref:network_configuration.adoc[Network Configuration] page.
 
 [NOTE]
 ====
 For information about our development plans and upcoming features, see xref:roadmap.adoc[Project Roadmap].
 ====
-
 
 [NOTE]
 ====
@@ -67,6 +92,7 @@ flowchart TB
         subgraph "API Layer"
             api[API Routes & Controllers]
             middleware[Middleware]
+            plugins[Plugins]
         end
 
         subgraph "Domain Layer"
@@ -109,11 +135,13 @@ flowchart TB
     %% API Layer connections
     api -- "Processes requests" --> middleware
     middleware -- "Validates & routes" --> domain
+    middleware -- "Invokes" --> plugins
 
     %% Domain Layer connections
     domain -- "Uses" --> relayer
     domain -- "Enforces" --> policies
     relayer -- "Processes" --> transaction
+    plugins -- "Interacts with" --> relayer
 
     %% Services Layer connections
     transaction -- "Signs with" --> signer
@@ -141,7 +169,7 @@ flowchart TB
     classDef configClass fill:#fbb,stroke:#333,stroke-width:2px
     classDef externalClass fill:#ddd,stroke:#333,stroke-width:1px
 
-    class api,middleware apiClass
+    class api,middleware,plugins apiClass
     class domain,relayer,policies domainClass
     class repositories,jobs,signer,provider infraClass
     class transaction,vault,webhook,monitoring serviceClass
@@ -175,6 +203,7 @@ openzeppelin-relayer/
 ├── scripts/              # Utility scripts
 ├── examples/             # Configuration examples
 ├── helpers/              # Rust helper scripts
+├── plugins/              # Plugins directory
 └── ... other root files (Cargo.toml, README.md, etc.)
 ```
 
@@ -187,6 +216,7 @@ For detailed information about each directory and its contents, see xref:structu
 
 * Rust 2021 edition
 * Docker (optional, for containerized deployment)
+* Node.js, typescript and ts-node (optional, for plugins)
 
 
 [TIP]
@@ -200,6 +230,7 @@ For quick setup with various configurations, check the https://github.com/OpenZe
 * `basic-example-metrics`: Setup with Prometheus and Grafana metrics
 * `vault-secret-signer`: Using HashiCorp Vault for key management
 * `vault-transit-signer`: Using Vault Transit for secure signing
+* `evm-gcp-kms-signer`: Using Google Cloud KMS for EVM secure signing
 * `evm-turnkey-signer`: Using Turnkey for EVM secure signing
 * `solana-turnkey-signer`:  Using Turnkey for Solana secure signing
 
@@ -278,685 +309,31 @@ For production runs, you can use:
 DOCKERFILE=Dockerfile.production docker compose up -d
 ----
 
-== Configuration References
+== Configuration
 
-Most configuration files should live under `./config`, including the signer configurations, under `./config/keys`.
-Please ensure appropriate access permissions on all configuration files (for `./config/keys/*`, we recommend `0500`.
+OpenZeppelin Relayer requires proper configuration before starting. The configuration system uses two main files:
+
+- **`config.json`**: Contains relayer definitions, signer configurations, and network policies
+- **`.env`**: Contains environment variables like API keys and connection strings
 
 [IMPORTANT]
 ====
-The configuration system consists of two main components:
-
-1. **`config.json`**: Contains relayer definitions, signer configurations, and network policies
-2. **`.env`** file: Contains environment variables like API keys and connection strings
-
-Both files must be properly configured before starting the application. Changes to either file require restarting the container to take effect.
+Both configuration files must be properly set up before starting the application. Changes to either file require restarting the container to take effect.
 
 For quick setup examples with pre-configured files, see the https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples[examples directory] in our GitHub repository.
 ====
 
-=== Environment configuration (.env)
-
-This defines some base configurations for the Relayer application:
-
-Copy the example environment file and update values according to your needs
-
-[source,bash]
-----
-cp .env.example .env
-----
-
-This table lists the environment variables and their default values.
-
-[cols="1,1,2,3", options="header"]
-|===
-| Environment Variable | Default Value | Accepted Values | Description
-
-| `RUST_LOG`
-| `info`
-| `info, debug, warn, error, trace`
-| Log level.
-
-| `CONFIG_DIR`
-| `./config`
-| `<any relative file path where config.json is located>`
-| Relative path of directory where config files reside
-
-| `CONFIG_FILE_NAME`
-| `config.json`
-| `<any file name>`
-| File Name of the configuration file.
-
-| `RATE_LIMIT_RPS`
-| `100`
-| `<any value>`
-| Rate limit for the API in requests per second.
-
-| `RATE_LIMIT_BURST_SIZE`
-| `300`
-| `<any value>`
-| Rate limit burst size.
-
-| `API_KEY`
-| ``
-| `string`,
-| API key to use for authentication to the relayer server. Minimum length 32 characters.
-
-| `WEBHOOK_SIGNING_KEY`
-| ``
-| `string`
-| Signing key to use for webhook notifications. Minimum length 32 characters.
-
-| `LOG_MODE`
-| `stdout`
-| `stdout, file`
-| Write logs either to console or to file.
-
-| `LOG_DATA_DIR`
-| `./logs`
-| `<any file path>`
-| Directory to persist log files on host.
-
-| `LOG_MAX_SIZE (in bytes)`
-| `1073741824`
-| `<any value in bytes>`
-| Size after which logs needs to be rolled.
-
-| `METRICS_ENABLED`
-| `false`
-| `bool`
-| Enable metrics server for external tools to scrape metrics.
-
-| `METRICS_PORT`
-| `8081`
-| `<any tcp port (preferably choose non-privileged ports i.e. (1024-65535))>`
-| Port to use for metrics server.
-
-| `REDIS_URL`
-| `redis://localhost:6379`
-| `<redis connection string>`
-| Redis connection URL for the relayer.
-
-| `REDIS_CONNECTION_TIMEOUT_MS`
-| `10000`
-| `<timeout in milliseconds>`
-| Connection timeout for Redis in milliseconds.
-
-| `RPC_TIMEOUT_MS`
-| `10000`
-| `<timeout in milliseconds>`
-| Sets the maximum time to wait for RPC connections before timing out.
-
-| `ENABLE_SWAGGER`
-| `false`
-| `true, false`
-| Enable or disable Swagger UI for API documentation.
-
-| `KEYSTORE_PASSPHRASE`
-| ``
-| `<keystore passphrase>`
-| Passphrase for the keystore file used for signing transactions.
-
-|===
-
-
-==== Environment configuration example
-
-`.env` file config example:
-
-```
-RUST_LOG=DEBUG
-CONFIG_DIR=./config
-CONFIG_FILE_NAME=config.json
-WEBHOOK_SIGNING_KEY=e1d42480-6f74-4d0b-85f4-b7f0bb690fae
-API_KEY=5eefd216-0e44-4ca7-b421-2925f90d30d5
-RATE_LIMIT_RPS=100
-RATE_LIMIT_BURST_SIZE=300
-METRICS_ENABLED=true
-METRICS_PORT=8081
-REDIS_URL=redis://localhost:6379
-REDIS_CONNECTION_TIMEOUT_MS=10000
-RPC_TIMEOUT_MS=10000
-ENABLE_SWAGGER=false
-KEYSTORE_PASSPHRASE=your_keystore_passphrase
-```
-
-=== Main configuration file (config.json)
-
-This file can exist in any directory, but the default location is `./config/config.json`.
-
-Copy the example config file and update values according to your needs
-
-[source,bash]
-----
-cp config/config.example.json config/config.json
-----
-
-There are 3 important sections in this file:
-
-- Signers: Defines transaction signing methods.
-- Notifications: Sets up status alerts
-- Relayers: Configures networks, notifications channels, policies & singers.
-
-
-==== 1. Signers
-
-* `signers` array, which must contain, at least, one valid signer configuration:
-
-Example:
-[source,json]
-----
-"signers": [
-  {
-    "id": "my_id",
-    "type": "local",
-    "config": {
-      "path": "config/keys/local-signer.json",
-      "passphrase": {
-        "type": "env",
-        "value": "KEYSTORE_PASSPHRASE"
-      }
-    }
-  }
-]
-----
-
-Supported signer types:
-
-- `test`: temporary key only for testing
-- `local`: keystore file signer
-- `vault`: vault secret signer
-- `vault_cloud`: hosted vault secret signer
-- `vault_transit`: vault transit signer
-- `turnkey`: turnkey signer
-
-Available configuration fields
-[cols="1,1,2"]
-|===
-|Field |Type |Description
-
-|id
-|String
-|Unique id for the signer
-
-|type
-|String
-|Type of signer (see `supported signer types`)
-
-|config
-|Map
-|signer type related config
-|===
-
-`local` type config:
-[cols="1,1,2"]
-|===
-|Field |Type |Description
-
-|path
-|String
-|path to the signer json file. Should be under the `./config` directory
-
-|passphrase.type
-|String
-|Type of passphrase (`env` or `plain`)
-
-|passphrase.value
-|String
-|Passphrase value, env variable name, ...
-|===
-
-`vault` type config:
-[cols="1,1,2"]
-|===
-|Field |Type |Description
-
-| address
-| String
-| Specifies the Vault API endpoint.
-
-| role_id.type
-| String
-| Type of value source (`env` or `plain`)
-
-| role_id.value
-| String
-| The Vault AppRole role identifier value, or the environment variable name where the AppRole role identifier is stored.
-
-| secret_id.type
-| String
-| Type of value source (`env` or `plain`)
-
-| secret_id.value
-| String
-| The Vault AppRole role secret value, or the environment variable name where the AppRole secret value is stored.
-
-| key_name
-| String
-| The name of the cryptographic key within Vault's Secret engine that is used for signing operations.
-
-| mount_point
-| String
-| The mount point for the Secrets engine in Vault. Defaults to `secret` if not explicitly specified. Optional.
-|===
-
-`vault_cloud` type config:
-[cols="1,1,2"]
-|===
-|Field |Type |Description
-
-| client_id
-| String
-| The client identifier used to authenticate with Vault Cloud.
-
-| client_secret.type
-| String
-| Type of value source (`env` or `plain`)
-
-| client_secret.value
-| String
-| The Vault secret value, or the environment variable name where the secret value is stored.
-
-| org_id
-| String
-| The organization ID for your Vault Cloud account.
-
-| project_id
-| String
-| The project ID that uniquely identifies your Vault Cloud project.
-
-| app_name
-| String
-| The name of the application integrating with Vault Cloud.
-
-| key_name
-| String
-| The name of the cryptographic key used for signing or encryption operations in Vault Cloud.
-|===
-
-
-`vault_transit` type config:
-[cols="1,1,2"]
-|===
-|Field |Type |Description
-
-| address
-| String
-| Specifies the Vault API endpoint.
-
-| role_id.type
-| String
-| Type of value source (`env` or `plain`)
-
-| role_id.value
-| String
-| The Vault AppRole role identifier value, or the environment variable name where the AppRole role identifier is stored.
-
-| secret_id.type
-| String
-| Type of value source (`env` or `plain`)
-
-| secret_id.value
-| String
-| The Vault AppRole role secret value, or the environment variable name where the AppRole secret value is stored.
-
-| key_name
-| String
-| The name of the cryptographic key within Vault's Transit engine that is used for signing operations.
-
-| mount_point
-| String
-| The mount point for the Transit secrets engine in Vault. Defaults to `transit` if not explicitly specified. Optional.
-
-| namespace
-| String
-| The Vault namespace for API calls. This is used only in Vault Enterprise environments. Optional.
-
-|pubkey
-|String
-|Public key of the cryptographic key within Vault's Transit engine that is used for signing operations
-|===
-
-
-`turnkey` type config:
-[cols="1,1,2"]
-|===
-|Field |Type |Description
-
-| api_public_key
-| String
-| The public key associated with your Turnkey API access credentials. Used for authentication to the Turnkey signing service.
-
-| api_private_key.type
-| String
-| Type of value source (`env` or `plain`)
-
-| api_private_key.value
-| String
-| The Turnkey API private key or environment variable name containing it. Used with the public key to authenticate API requests.
-
-| organization_id
-| String
-| Your unique Turnkey organization identifier. Required to access resources within your specific organization.
-
-| private_key_id
-| String
-| The unique identifier of the private key in your Turnkey account that will be used for signing operations.
-
-| public_key
-| String
-| The public key corresponding to the private key identified by private_key_id. Used for address derivation and signature verification.
-|===
-
-
-==== 2. Notifications
-
-* `notifications` array, which should contain, at least, one valid configuration:
-
-[source,json]
-----
-"notifications": [
-  {
-    "id": "notification-test",
-    "type": "webhook",
-    "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
-    "signing_key": {
-      "type": "env",
-      "value": "WEBHOOK_SIGNING_KEY"
-    }
-  }
-]
-----
-Available configuration fields
-[cols="1,1,2"]
-|===
-|Field |Type |Description
-
-|id
-|String
-|Unique id for the notification
-
-|type
-|String
-|Type of notification (only `webhook` available, for now)
-
-|url
-|String
-|Notification URL
-
-|signing_key.type
-|String
-|Type of key used in signing the notification (`env` or `plain`)
-
-|signing_key.value
-|String
-|Signing key value, env variable name, ...
-|===
-
-==== 3. Relayers
-
-* `relayers` array, containing at least one valid relayer configuration:
-
-[source,json]
-----
-"relayers": [
-  {
-    "id": "solana-testnet",
-    "name": "Solana Testnet",
-    "paused": false,
-    "notification_id": "notification-test",
-    "signer_id": "local-signer",
-    "network_type": "solana",
-    "network": "testnet",
-    "policies": {
-      "allowed_programs": [
-          "11111111111111111111111111111111",
-          "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-          "BPFLoaderUpgradeab1e11111111111111111111111"
-        ]
-    }
-  },
-]
-----
-
-Available configuration fields
-[cols="1,1,2"]
-|===
-|Field |Type |Description
-
-|id
-|String
-|Unique id for the relayer
-
-|name
-|String
-|Human readable name for the relayer
-
-|paused
-|Boolean
-|Whether or not the relayer is paused (`true`, `false`)
-
-|notification_id
-|String
-|ID of a configured notification object
-
-|signer_id
-|String
-|ID of a configured signer
-
-|network_type
-|String
-|Type of network the relayer will connect to (`evm`, `solana`)
-
-|network
-|String
-|Network the relayer will connect to. Please refer to xref:supported_networks[`Supported networks`].
-
-|custom_rpc_urls
-|list
-|Optional custom RPC URLs for the network. If provided, this will be used instead of the public RPC URLs. This is useful for using your own RPC node or a paid service provider. The first url of the list is going to be used as the default
-
-|policies
-|list
-|Overrides default policies. Please refer to the xref:network_policies[`Policies`] table
-|===
-
-[#supported_networks]
-Supported networks
-[cols="1,1, 2"]
-|===
-|Network type |Network |Description
-
-|solana
-|mainnet-beta
-|Solana's mainnet
-
-|solana
-|devnet
-|Solana's devnet
-
-|solana
-|testnet
-|Solana's testnet
-
-|evm
-|mainnet
-|Ethereum mainnet
-
-|evm
-|sepolia
-|Ethereum testnet
-
-|evm
-|holesky
-|Ethereum testnet
-|===
-
-[#network_policies]
-Policies
-[cols="1,1,1,2"]
-|===
-|Network type |Policy |Type |Description
-
-|solana, evm
-|min_balance
-|unsigned 128
-|Minimum balance (in lamports or wei) required for the relayer to operate. Optional.
-
-|solana
-|fee_payment_strategy
-|enum(user,relayer)
-|Specifies who pays the fee. "user" (default) means the sender pays; "relayer" means the relayer pays. For "user", RPC methods add an instruction to transfer SPL tokens (calculated from the current SOL price plus a configurable margin) from the user to the relayer, ensuring fees are sustainably covered in tokens rather than SOL.
-
-|solana
-|fee_margin_percentage
-|f32
-|Additional margin percentage added to estimated transaction fees to account for price fluctuations. For example, a value of 10 will add 10% to estimated fees. Optional.
-
-|solana
-|max_allowed_fee_lamports
-|unsigned 64
-|Maximum allowed fee (in lamports) for a transaction. Optional.
-
-|solana
-|allowed_tokens
-|Vector<AllowedToken>
-|List of allowed tokens. Only these tokens are supported if provided. Optional.
-
-|solana
-|allowed_programs
-|Vector<String>
-|List of allowed programs by their identifiers. Only these programs are supported if provided.
-
-|solana
-|allowed_accounts
-|Vector<String>
-|List of allowed accounts by their public keys. The relayer will only operate with these accounts if provided.
-
-|solana
-|disallowed_accounts
-|Vector<String>
-|List of disallowed accounts by their public keys. These accounts will be explicitly blocked.
-
-|solana
-|max_tx_data_size
-|unsigned 16
-|Maximum transaction size. Optional.
-
-|solana
-|max_signatures
-|unsigned 8
-|Maximum supported signatures. Optional.
-
-|evm
-|gas_price_cap
-|unsigned 128
-|Specify a maximum gas price for every transaction sent with the Relayer. When enabled, any transaction exceeding the cap will have its gasPrice or maxFeePerGas overwritten. (Optional)
-
-|evm
-|whitelist_receivers
-|Vector<String>
-|A list of authorized contracts for each transaction sent using the Relayer. Transactions will be rejected if the destination address is not on the list. (Optional)
-|===
-
-==== Config file full example
-
-Full `config/config.json` example with evm and solana relayers definitions using keystore signer:
-
-[source,json]
-----
-{
-  "relayers": [
-    {
-      "id": "sepolia-example",
-      "name": "Sepolia Example",
-      "network": "sepolia",
-      "paused": false,
-      "notification_id": "notification-example",
-      "signer_id": "local-signer",
-      "network_type": "evm",
-      "custom_rpc_urls": ["https://your-private-rpc-url.example.com"],
-      "policies": {
-        "gas_price_cap": 30000000000000,
-        "eip1559_pricing": true
-      }
-    },
-    {
-      "id": "solana-example",
-      "name": "Solana Example",
-      "network": "devnet",
-      "paused": false,
-      "notification_id": "notification-example",
-      "signer_id": "local-signer",
-      "network_type": "solana",
-      "custom_rpc_urls": ["https://your-private-solana-rpc.example.com"],
-      "policies": {
-        "fee_payment_strategy": "user",
-        "min_balance": 0,
-        "allowed_tokens": [
-          {
-            "mint": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr",
-            "max_allowed_fee": 100000000
-          },
-          {
-            "mint": "So11111111111111111111111111111111111111112"
-          }
-        ]
-      }
-    }
-  ],
-  "notifications": [
-    {
-      "id": "notification-example",
-      "type": "webhook",
-      "url": "https://webhook.site/1384d4d9-21b1-40a0-bcd1-d3f3b66be955",
-      "signing_key": {
-        "type": "env",
-        "value": "WEBHOOK_SIGNING_KEY"
-      }
-    }
-  ],
-  "signers": [
-    {
-      "id": "local-signer",
-      "type": "local",
-      "config": {
-        "path": "config/keys/local-signer.json",
-        "passphrase": {
-          "type": "env",
-          "value": "KEYSTORE_PASSPHRASE"
-        }
-      }
-    }
-  ]
-}
-```
-----
-
-=== RPC URL Configuration
-
-The relayer supports two ways to configure RPC URLs:
-
-1. **Public RPC URLs**: These are the default RPC endpoints provided by the network. They are automatically selected based on the network configuration.
-
-2. **Custom RPC URL**: You can specify a custom RPC URL using the `custom_rpc_urls` field in the relayer configuration. This is useful when you want to:
-   * Use your own RPC node
-   * Use a paid service provider for better reliability and performance
-   * Override the default public RPC URLs
-   * Access custom network endpoints
-
-When both are available, the relayer will:
-1. First attempt to use the `custom_rpc_urls` if configured
-2. Fall back to the public RPC URLs if no custom URL is configured or if it's not accessible
-
-[IMPORTANT]
-====
-When using custom RPC URLs:
-
-* Ensure the URL is secure (HTTPS) when accessing over public networks
-* Keep your API keys and authentication tokens secure
-* Test the RPC endpoint's reliability and performance before deploying to production
-====
+For comprehensive configuration details, including:
+
+- Environment variables and their settings
+- Main configuration file structure
+- Signer configurations (local, vault, cloud KMS, etc.)
+- Notification setup
+- Relayer policies and network settings
+- Plugin configuration
+- Complete configuration examples
+
+See the dedicated xref:configuration.adoc[Configuration Guide].
 
 == Important Considerations
 

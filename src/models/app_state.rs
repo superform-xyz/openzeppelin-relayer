@@ -4,10 +4,11 @@
 use std::sync::Arc;
 
 use crate::{
-    jobs::JobProducerTrait,
+    jobs::{JobProducer, JobProducerTrait},
     repositories::{
-        InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
-        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
+        InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
+        InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
 };
 
@@ -23,11 +24,17 @@ pub struct AppState<J: JobProducerTrait> {
     pub signer_repository: Arc<InMemorySignerRepository>,
     /// Repository for managing notification data.
     pub notification_repository: Arc<InMemoryNotificationRepository>,
+    /// Repository for managing network data.
+    pub network_repository: Arc<InMemoryNetworkRepository>,
     /// Store for managing transaction counters.
     pub transaction_counter_store: Arc<InMemoryTransactionCounter>,
     /// Producer for managing job creation and execution.
     pub job_producer: Arc<J>,
+    /// Repository for managing plugins.
+    pub plugin_repository: Arc<InMemoryPluginRepository>,
 }
+
+pub type DefaultAppState = AppState<JobProducer>;
 
 impl<J: JobProducerTrait> AppState<J> {
     /// Returns a clone of the relayer repository.
@@ -66,6 +73,15 @@ impl<J: JobProducerTrait> AppState<J> {
         Arc::clone(&self.notification_repository)
     }
 
+    /// Returns a clone of the network repository.
+    ///
+    /// # Returns
+    ///
+    /// An `Arc` pointing to the `InMemoryNetworkRepository`.
+    pub fn network_repository(&self) -> Arc<InMemoryNetworkRepository> {
+        Arc::clone(&self.network_repository)
+    }
+
     /// Returns a clone of the transaction counter store.
     ///
     /// # Returns
@@ -82,6 +98,15 @@ impl<J: JobProducerTrait> AppState<J> {
     /// An `Arc` pointing to the `JobProducer`.
     pub fn job_producer(&self) -> Arc<J> {
         Arc::clone(&self.job_producer)
+    }
+
+    /// Returns a clone of the plugin repository.
+    ///
+    /// # Returns
+    ///
+    /// An `Arc` pointing to the `InMemoryPluginRepository`.
+    pub fn plugin_repository(&self) -> Arc<InMemoryPluginRepository> {
+        Arc::clone(&self.plugin_repository)
     }
 }
 
@@ -120,8 +145,10 @@ mod tests {
             transaction_repository: Arc::new(InMemoryTransactionRepository::default()),
             signer_repository: Arc::new(InMemorySignerRepository::default()),
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
+            network_repository: Arc::new(InMemoryNetworkRepository::default()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             job_producer: Arc::new(mock_job_producer),
+            plugin_repository: Arc::new(InMemoryPluginRepository::new()),
         }
     }
 
@@ -184,5 +211,15 @@ mod tests {
 
         assert!(Arc::ptr_eq(&producer1, &producer2));
         assert!(Arc::ptr_eq(&producer1, &app_state.job_producer));
+    }
+
+    #[test]
+    fn test_plugin_repository_getter() {
+        let app_state = create_test_app_state();
+        let store1 = app_state.plugin_repository();
+        let store2 = app_state.plugin_repository();
+
+        assert!(Arc::ptr_eq(&store1, &store2));
+        assert!(Arc::ptr_eq(&store1, &app_state.plugin_repository));
     }
 }

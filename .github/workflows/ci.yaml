@@ -9,9 +9,18 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+    paths-ignore:
+      - docs/**
+      - '**.md'
+      - .github/**
+      - .gitignore
   push:
     branches:
       - main
+    paths-ignore:
+      - docs/**
+      - '**.md'
+      - .github/**
 # run concurrency group for the workflow
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -32,7 +41,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Get changed files
         id: changed-files-yaml
-        uses: tj-actions/changed-files@b74df86ccb65173a8e33ba5492ac1a2ca6b216fd  # v46.0.4
+        uses: tj-actions/changed-files@115870536a85eaf050e369291c7895748ff12aea  # v46.0.4
         with:
           files_yaml: |
             code:
@@ -44,6 +53,8 @@ jobs:
               - 'Cargo.toml'
             docker:
               - 'Dockerfile.development'
+              - 'Dockerfile.production'
+              - 'docker-compose.yml'
               - 'Cargo.lock'
               - 'Cargo.toml'
             tests:
@@ -56,7 +67,6 @@ jobs:
     name: CI
     needs:
       - msrv
-      - lockfile
       - rustfmt
       - clippy
     runs-on: ubuntu-latest
@@ -85,25 +95,6 @@ jobs:
       # Check the minimum supported Rust version
       - name: Default features
         run: cargo hack check --feature-powerset --locked --rust-version --all-targets
-  lockfile:
-    if: ${{ github.event.pull_request.draft == false && github.event_name != 'push' && needs.changed_files.outputs.changed-lockfile-files == 'true' }}
-    needs: changed_files
-    runs-on: ubuntu-latest
-    steps:
-      # Checkout the repository
-      - name: Checkout Code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - name: Prepare
-        id: init
-        uses: ./.github/actions/prepare
-
-      # Get the output of the prepare composite action
-      - name: Get cache-hit output
-        run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
-
-      # Check the lockfile
-      - name: Validate lockfile updates
-        run: cargo update --locked
   rustfmt:
     if: ${{ github.event.pull_request.draft == false && github.event_name != 'push' && needs.changed_files.outputs.changed-rust-files == 'true' }}
     needs: changed_files
@@ -156,7 +147,7 @@ jobs:
           path: clippy-results.sarif
           retention-days: 1
       - name: Upload
-        uses: github/codeql-action/upload-sarif@dd196fa9ce80b6bacc74ca1c32bd5b0ba22efca7  # v3.28.3
+        uses: github/codeql-action/upload-sarif@fca7ace96b7d713c7035871441bd52efbe39e27e  # v3.28.19
         with:
           sarif_file: clippy-results.sarif
           wait-for-processing: true
@@ -168,15 +159,21 @@ jobs:
       contents: read
     needs:
       - changed_files
-      - ci
     runs-on: ubuntu-latest
     steps:
       # Checkout the repository
       - name: Checkout Code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - name: Get disk space
-        run: df -h
-        continue-on-error: true
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install TypeScript and ts-node
+        run: |
+          npm install -g typescript ts-node
+          # Verify installation
+          ts-node --version
+          tsc --version
       - name: free disk space
         run: |
           sudo swapoff -a
@@ -188,20 +185,15 @@ jobs:
           else
             echo "No Docker images found to remove"
           fi
-          df -h
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
+        with:
+          components: llvm-tools-preview
 
       # Get the output of the prepare composite action
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@9399c7bb15d4c7d47b27263d024f0a4978346ba4  # v1.11.0
-        with:
-          toolchain: stable
-          components: llvm-tools-preview
-          rustflags: ''
       - name: Install cargo hack
         uses: taiki-e/install-action@cargo-hack
       - name: Install cargo-llvm-cov
@@ -235,7 +227,7 @@ jobs:
 
       # Upload unit coverage
       - name: Upload Unit Coverage to Codecov
-        uses: codecov/codecov-action@0565863a31f2c772f9f0395002a31e3f06189574  # v5.4.0
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24  # v5.4.3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: unit-coverage
@@ -245,7 +237,7 @@ jobs:
 
       # Upload integration coverage
       - name: Upload Integration Coverage to Codecov
-        uses: codecov/codecov-action@0565863a31f2c772f9f0395002a31e3f06189574  # v5.4.0
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24  # v5.4.3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: integration-coverage
@@ -255,7 +247,7 @@ jobs:
 
       # Upload properties coverage
       - name: Upload Properties Coverage to Codecov
-        uses: codecov/codecov-action@0565863a31f2c772f9f0395002a31e3f06189574  # v5.4.0
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24  # v5.4.3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: properties-coverage
@@ -267,8 +259,8 @@ jobs:
     needs:
       - changed_files
       - ci
-      - test
-    if: ${{ needs.changed_files.outputs.changed-docker-files == 'true' }}
+    if: |
+      ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-docker-files == 'true' }}
     steps:
       # Checkout the repository
       - name: Checkout Code
@@ -276,7 +268,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
       - name: Build local container
-        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
         with:
           tags: openzeppelin-relayer-dev:${{ github.sha }}
           push: false

@@ -18,3 +18,9 @@ pub use signer::*;
 
 mod address;
 pub use address::*;
+
+mod provider;
+pub use provider::*;
+
+mod stellar_validation;
+pub use stellar_validation::*;

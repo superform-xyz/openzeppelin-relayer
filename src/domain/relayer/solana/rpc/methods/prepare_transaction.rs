@@ -30,6 +30,7 @@ use solana_sdk::{
 };
 use std::str::FromStr;
 
+use super::{utils::FeeQuote, *};
 use crate::{
     models::{
         EncodedSerializedTransaction, PrepareTransactionRequestParams, PrepareTransactionResult,
@@ -37,8 +38,6 @@ use crate::{
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
-
-use super::{utils::FeeQuote, *};
 
 impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
@@ -230,17 +229,19 @@ mod tests {
 
     use std::str::FromStr;
 
+    use super::*;
     use crate::{
         constants::WRAPPED_SOL_MINT,
-        models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
-        services::QuoteResponse,
+        models::{
+            RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            SolanaAllowedTokensSwapConfig,
+        },
+        services::{QuoteResponse, RoutePlan, SwapInfo},
     };
-
-    use super::*;
     use solana_sdk::{
         hash::Hash, message::Message, program_pack::Pack, signature::Keypair, signer::Signer,
-        system_instruction,
     };
+    use solana_system_interface::instruction;
     use spl_associated_token_account::get_associated_token_address;
     use spl_token::state::Account;
 
@@ -257,7 +258,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -291,6 +294,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -435,6 +439,24 @@ mod tests {
                         out_amount: 80000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: SwapInfo {
+                                amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(),
+                                label: "Stabble Stable Swap".to_string(),
+                                input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                                    .to_string(),
+                                output_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                                in_amount: "1000000".to_string(),
+                                out_amount: "999984".to_string(),
+                                fee_amount: "10".to_string(),
+                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                            },
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -449,6 +471,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -502,7 +525,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -529,6 +554,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -562,7 +588,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -570,7 +598,7 @@ mod tests {
         // Create transaction with different fee payer
         let wrong_fee_payer = Keypair::new();
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&wrong_fee_payer.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&wrong_fee_payer.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&wrong_fee_payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
@@ -601,6 +629,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -646,7 +675,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -677,12 +708,13 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
 
         // Create test transaction
-        let ix = system_instruction::transfer(&Pubkey::new_unique(), &Pubkey::new_unique(), 1000);
+        let ix = instruction::transfer(&Pubkey::new_unique(), &Pubkey::new_unique(), 1000);
         let message = Message::new(&[ix], Some(&relayer_keypair.pubkey()));
         let transaction = Transaction::new_unsigned(message);
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
@@ -736,7 +768,9 @@ mod tests {
                 symbol: Some("ALLOWED".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -771,6 +805,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });

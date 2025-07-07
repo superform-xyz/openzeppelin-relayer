@@ -8,29 +8,25 @@
 //! The relayer domain is organized into network-specific implementations
 //! that share common interfaces for transaction handling and monitoring.
 
+use actix_web::web::ThinData;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
+#[cfg(test)]
+use mockall::automock;
+
 use crate::{
-    config::ServerConfig,
-    jobs::JobProducer,
+    jobs::JobProducerTrait,
     models::{
-        DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
+        AppState, DecoratedSignature, DeletePendingTransactionsResponse, EvmNetwork,
+        EvmTransactionDataSignature, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, TransactionError, TransactionRepoModel,
+        RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
     },
-    repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepositoryStorage,
-    },
-    services::{
-        get_solana_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
-        TransactionCounterService,
-    },
+    services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
 };
 
-use crate::services::EvmProvider;
 use async_trait::async_trait;
 use eyre::Result;
 
@@ -77,9 +73,11 @@ pub trait Relayer {
     ///
     /// # Returns
     ///
-    /// A `Result` containing `true` if transactions were successfully deleted,
-    /// or a `RelayerError` on failure.
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError>;
+    /// A `Result` containing a `DeletePendingTransactionsResponse` with details
+    /// about which transactions were cancelled and which failed, or a `RelayerError` on failure.
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError>;
 
     /// Signs data using the relayer's credentials.
     ///
@@ -127,9 +125,9 @@ pub trait Relayer {
     ///
     /// # Returns
     ///
-    /// A `Result` containing `true` if the relayer is active, or a
+    /// A `Result` containing `RelayerStatus` on success, or a
     /// `RelayerError` on failure.
-    async fn get_status(&self) -> Result<bool, RelayerError>;
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError>;
 
     /// Initializes the relayer.
     ///
@@ -146,10 +144,24 @@ pub trait Relayer {
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 
+/// Solana Relayer Dex Trait
+/// Subset of methods for Solana relayer
+#[async_trait]
+#[allow(dead_code)]
+#[cfg_attr(test, automock)]
+pub trait SolanaRelayerDexTrait {
+    /// Handles a token swap request.
+    async fn handle_token_swap_request(
+        &self,
+        relayer_id: String,
+    ) -> Result<Vec<SwapResult>, RelayerError>;
+}
+
 /// Solana Relayer Trait
 /// Subset of methods for Solana relayer
 #[async_trait]
 #[allow(dead_code)]
+#[cfg_attr(test, automock)]
 pub trait SolanaRelayerTrait {
     /// Retrieves the current balance of the relayer.
     ///
@@ -189,14 +201,14 @@ pub trait SolanaRelayerTrait {
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 
-pub enum NetworkRelayer {
-    Evm(DefaultEvmRelayer),
-    Solana(SolanaRelayer),
-    Stellar(DefaultStellarRelayer),
+pub enum NetworkRelayer<J: JobProducerTrait + 'static> {
+    Evm(DefaultEvmRelayer<J>),
+    Solana(DefaultSolanaRelayer<J>),
+    Stellar(DefaultStellarRelayer<J>),
 }
 
 #[async_trait]
-impl Relayer for NetworkRelayer {
+impl<J: JobProducerTrait + 'static> Relayer for NetworkRelayer<J> {
     async fn process_transaction_request(
         &self,
         tx_request: NetworkTransactionRequest,
@@ -218,7 +230,9 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.delete_pending_transactions().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
@@ -256,7 +270,7 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn get_status(&self) -> Result<bool, RelayerError> {
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
@@ -281,97 +295,112 @@ impl Relayer for NetworkRelayer {
     }
 }
 
-pub trait RelayerFactoryTrait {
-    fn create_relayer(
+#[async_trait]
+pub trait RelayerFactoryTrait<J: JobProducerTrait + 'static> {
+    async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
-        transaction_counter_store: Arc<InMemoryTransactionCounter>,
-        job_producer: Arc<JobProducer>,
-    ) -> Result<NetworkRelayer, RelayerError>;
+        state: &ThinData<AppState<J>>,
+    ) -> Result<NetworkRelayer<J>, RelayerError>;
 }
+
 pub struct RelayerFactory;
 
-impl RelayerFactoryTrait for RelayerFactory {
-    fn create_relayer(
+#[async_trait]
+impl<J: JobProducerTrait + 'static> RelayerFactoryTrait<J> for RelayerFactory {
+    async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
-        transaction_counter_store: Arc<InMemoryTransactionCounter>,
-        job_producer: Arc<JobProducer>,
-    ) -> Result<NetworkRelayer, RelayerError> {
+        state: &ThinData<AppState<J>>,
+    ) -> Result<NetworkRelayer<J>, RelayerError> {
         match relayer.network_type {
             NetworkType::Evm => {
-                let network = match EvmNetwork::from_network_str(&relayer.network) {
-                    Ok(network) => network,
-                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
-                };
-
-                // Try custom RPC URL first, then fall back to public RPC URLs
-                let rpc_url = network
-                    .get_rpc_url(relayer.custom_rpc_urls.clone())
+                let network_repo = state
+                    .network_repository()
+                    .get(NetworkType::Evm, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
                     .ok_or_else(|| {
-                        RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
+                        RelayerError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
                     })?;
 
-                let rpc_timeout_ms = ServerConfig::from_env().rpc_timeout_ms;
-                let evm_provider = EvmProvider::new_with_timeout(&rpc_url, rpc_timeout_ms)
-                    .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+                let network = EvmNetwork::try_from(network_repo)?;
 
-                let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
+                let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),
-                    transaction_counter_store,
+                    state.transaction_counter_store(),
                 ));
                 let relayer = DefaultEvmRelayer::new(
                     relayer,
                     signer_service,
                     evm_provider,
                     network,
-                    relayer_repository,
-                    transaction_repository,
+                    state.relayer_repository(),
+                    state.network_repository(),
+                    state.transaction_repository(),
                     transaction_counter_service,
-                    job_producer,
+                    state.job_producer(),
                 )?;
 
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let provider = Arc::new(get_solana_network_provider(
-                    &relayer.network,
-                    relayer.custom_rpc_urls.clone(),
-                )?);
-                let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
-                let jupiter_service = JupiterService::new_from_network(relayer.network.as_str());
-                let rpc_methods = SolanaRpcMethodsImpl::new(
-                    relayer.clone(),
-                    provider.clone(),
-                    signer_service.clone(),
-                    Arc::new(jupiter_service),
-                    job_producer.clone(),
-                );
-                let rpc_handler = Arc::new(SolanaRpcHandler::new(rpc_methods));
-                let relayer = SolanaRelayer::new(
+                let solana_relayer = create_solana_relayer(
                     relayer,
-                    signer_service,
-                    relayer_repository,
-                    provider,
-                    rpc_handler,
-                    transaction_repository,
-                    job_producer,
-                )?;
-                Ok(NetworkRelayer::Solana(relayer))
+                    signer,
+                    state.relayer_repository(),
+                    state.network_repository(),
+                    state.transaction_repository(),
+                    state.job_producer(),
+                )
+                .await?;
+                Ok(NetworkRelayer::Solana(solana_relayer))
             }
             NetworkType::Stellar => {
-                let relayer = DefaultStellarRelayer::new(
+                let network_repo = state
+                    .network_repository()
+                    .get(NetworkType::Stellar, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = StellarNetwork::try_from(network_repo)?;
+
+                let stellar_provider =
+                    get_network_provider(&network, relayer.custom_rpc_urls.clone())
+                        .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+
+                let transaction_counter_service = Arc::new(TransactionCounterService::new(
+                    relayer.id.clone(),
+                    relayer.address.clone(),
+                    state.transaction_counter_store(),
+                ));
+
+                let relayer = DefaultStellarRelayer::<J>::new(
                     relayer,
-                    relayer_repository,
-                    transaction_repository,
-                    job_producer,
-                )?;
+                    stellar_provider,
+                    stellar::StellarRelayerDependencies::new(
+                        state.relayer_repository(),
+                        state.network_repository(),
+                        state.transaction_repository(),
+                        transaction_counter_service,
+                        state.job_producer(),
+                    ),
+                )
+                .await?;
                 Ok(NetworkRelayer::Stellar(relayer))
             }
         }
@@ -438,70 +467,6 @@ impl SignTransactionResponse {
             )),
         }
     }
-}
-
-// JSON-RPC Request struct
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcRequest<T> {
-    pub jsonrpc: String,
-    #[serde(flatten)]
-    pub params: T,
-    pub id: u64,
-}
-
-// JSON-RPC Response struct
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcResponse<T> {
-    pub jsonrpc: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub result: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub error: Option<JsonRpcError>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub id: Option<u64>,
-}
-
-impl<T> JsonRpcResponse<T> {
-    /// Creates a new successful JSON-RPC response with the given result and id.
-    ///
-    /// # Arguments
-    /// * `id` - The request identifier
-    /// * `result` - The result value to include in the response
-    ///
-    /// # Returns
-    /// A new JsonRpcResponse with the specified result
-    pub fn result(id: u64, result: T) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: Some(result),
-            error: None,
-            id: Some(id),
-        }
-    }
-
-    pub fn error(code: i32, message: &str, description: &str) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: None,
-            error: Some(JsonRpcError {
-                code,
-                message: message.to_string(),
-                description: description.to_string(),
-            }),
-            id: None,
-        }
-    }
-}
-
-// JSON-RPC Error struct
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcError {
-    pub code: i32,
-    pub message: String,
-    pub description: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
