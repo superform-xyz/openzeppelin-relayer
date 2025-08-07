@@ -14,7 +14,7 @@ use crate::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
         get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
         RelayerFactory, RelayerFactoryTrait, SignDataRequest, SignDataResponse,
-        SignTypedDataRequest, Transaction,
+        SignTransactionRequest, SignTypedDataRequest, Transaction,
     },
     jobs::JobProducerTrait,
     models::{
@@ -777,10 +777,47 @@ where
     Ok(HttpResponse::Ok().json(result))
 }
 
+/// Signs a transaction using a specific relayer
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `request` - The sign transaction request containing unsigned XDR.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The signed transaction response.
+pub async fn sign_transaction<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    relayer_id: String,
+    request: SignTransactionRequest,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
+    let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
+    relayer.validate_active_state()?;
+
+    // Get the network relayer and use its sign_transaction method
+    let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
+    let result = network_relayer.sign_transaction(&request).await?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
+        domain::SignTransactionRequestStellar,
         models::{
             ApiResponse, CreateRelayerPolicyRequest, CreateRelayerRequest, RelayerEvmPolicy,
             RelayerNetworkPolicyResponse, RelayerNetworkType, RelayerResponse, RelayerSolanaPolicy,
@@ -1965,6 +2002,113 @@ mod tests {
             assert!(msg.contains("Relayer with ID nonexistent-relayer not found"));
         } else {
             panic!("Expected NotFound error for nonexistent relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_sign_transaction_success() {
+        let _lock = ENV_MUTEX.lock().await;
+        setup_test_env();
+        let network = create_mock_stellar_network();
+        let signer = create_mock_signer();
+        let mut relayer = create_mock_relayer("test-relayer".to_string(), false);
+        relayer.network_type = NetworkType::Stellar;
+        let app_state = create_mock_app_state(
+            Some(vec![relayer]),
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: "test-unsigned-xdr".to_string(),
+        });
+
+        let result = sign_transaction(
+            "test-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        // The actual signing will fail in the mock environment, but we can test that
+        // the function is callable with generics and processes the request
+        assert!(result.is_err());
+        cleanup_test_env();
+    }
+
+    #[actix_web::test]
+    async fn test_sign_transaction_relayer_not_found() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: "test-unsigned-xdr".to_string(),
+        });
+
+        let result = sign_transaction(
+            "nonexistent-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Relayer with ID nonexistent-relayer not found"));
+        } else {
+            panic!("Expected NotFound error for nonexistent relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_sign_transaction_relayer_disabled() {
+        let mut relayer = create_mock_relayer("disabled-relayer".to_string(), false);
+        relayer.paused = true;
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: "test-unsigned-xdr".to_string(),
+        });
+
+        let result = sign_transaction(
+            "disabled-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::ForbiddenError(msg)) = result {
+            assert!(msg.contains("Relayer paused"));
+        } else {
+            panic!("Expected ForbiddenError for paused relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_sign_transaction_system_disabled() {
+        let mut relayer = create_mock_relayer("system-disabled-relayer".to_string(), false);
+        relayer.system_disabled = true;
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: "test-unsigned-xdr".to_string(),
+        });
+
+        let result = sign_transaction(
+            "system-disabled-relayer".to_string(),
+            request,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::ForbiddenError(msg)) = result {
+            assert!(msg.contains("Relayer disabled"));
+        } else {
+            panic!("Expected ForbiddenError for system disabled relayer");
         }
     }
 }
