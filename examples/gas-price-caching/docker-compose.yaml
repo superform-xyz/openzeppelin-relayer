@@ -9,18 +9,14 @@ services:
     secrets:
       - api_key
       - webhook_signing_key
-      - keystore_fund_passphrase
-      - keystore_seq_001_passphrase
-      - keystore_seq_002_passphrase
+      - keystore_passphrase
     environment:
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL}
       RATE_LIMIT_REQUESTS_PER_SECOND: 10
       RATE_LIMIT_BURST: 50
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
-      KEYSTORE_PASSPHRASE_FUND: ${KEYSTORE_PASSPHRASE_FUND}
-      KEYSTORE_PASSPHRASE_SEQ_001: ${KEYSTORE_PASSPHRASE_SEQ_001}
-      KEYSTORE_PASSPHRASE_SEQ_002: ${KEYSTORE_PASSPHRASE_SEQ_002}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
     security_opt:
       - no-new-privileges
     networks:
@@ -28,8 +24,6 @@ services:
       - metrics-network
     volumes:
       - ./config:/app/config/
-      - ../../config/networks:/app/config/networks
-      - ./launchtube:/app/plugins/launchtube
     depends_on:
       - redis
     restart: on-failure:5
@@ -61,13 +55,11 @@ volumes:
   redis_data:
     driver: local
 secrets:
+  redis_url:
+    environment: REDIS_URL
   api_key:
     environment: API_KEY
   webhook_signing_key:
     environment: WEBHOOK_SIGNING_KEY
-  keystore_fund_passphrase:
-    environment: KEYSTORE_PASSPHRASE_FUND
-  keystore_seq_001_passphrase:
-    environment: KEYSTORE_PASSPHRASE_SEQ_001
-  keystore_seq_002_passphrase:
-    environment: KEYSTORE_PASSPHRASE_SEQ_002
+  keystore_passphrase:
+    environment: KEYSTORE_PASSPHRASE

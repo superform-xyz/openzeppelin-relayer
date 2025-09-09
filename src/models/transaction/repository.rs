@@ -1680,6 +1680,7 @@ mod tests {
                 required_confirmations: Some(12),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             }),
         };
 
@@ -2107,6 +2108,7 @@ mod tests {
                 max_fee: None,
                 timeout_seconds: None,
                 min_balance: Some(DEFAULT_STELLAR_MIN_BALANCE),
+                concurrent_transactions: None,
             }),
             address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
             notification_id: None,
